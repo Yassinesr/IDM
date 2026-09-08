@@ -1,0 +1,12 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+result/
+# Placeholders in the repo, real weights are pulled onto the PVC at runtime.
+ckpt/
+# ~27 MB of tag metadata that only the training/eval paths read; mount the
+# dataset from the PVC instead of baking it into the image.
+vitonhd_train_tagged.json
+vitonhd_test_tagged.json
+assets/

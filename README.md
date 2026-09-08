@@ -32,6 +32,11 @@ conda env create -f environment.yaml
 conda activate idm
 ```
 
+> Running this on an **Alaya NeW (九章智算云)** GPU cluster from VS Code?
+> See [`docs/alaya-new-setup.md`](docs/alaya-new-setup.md) for the Workshop /
+> Aladdin setup, PVC-backed caches, mirror-aware checkpoint downloads, and the
+> dependency pins that path needs.
+
 ## Data preparation
 
 ### VITON-HD
