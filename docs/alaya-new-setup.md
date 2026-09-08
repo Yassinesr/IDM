@@ -112,20 +112,27 @@ df -h                                   # confirm the PVC mount path
 export IDM_ROOT=/pvc/idm                # <- your actual mount path
 
 mkdir -p "$IDM_ROOT" && cd "$IDM_ROOT"
-git clone https://github.com/Yassinesr/IDM.git IDM-VTON
+# -b matters: these scripts live on the setup branch, not on main.
+git clone -b claude/alaya-new-cloud-setup-4ode4d \
+    https://github.com/Yassinesr/IDM.git IDM-VTON
 cd IDM-VTON
 
 bash scripts/alaya/00_bootstrap_workshop.sh
 ```
 
-That creates the venv on the PVC, installs torch 2.0.1+cu118 and
-`requirements.txt`, and prints the GPUs it can see. It is idempotent — re-run it
-after a Workshop rebuild and pip serves most of it from the PVC cache.
+That builds the environment on the PVC — a plain venv if the image already has
+python 3.10, otherwise a Miniconda-provisioned 3.10 env (§2.1) — installs
+torch 2.0.1+cu118 and `requirements.txt`, and prints the GPUs it can see. It is
+idempotent: re-run it after a Workshop rebuild and pip serves most of it from
+the PVC cache.
 
 ### 2.3 Every session after that
 
+A new Workshop terminal starts with none of this set, so:
+
 ```bash
 export IDM_ROOT=/pvc/idm
+cd "$IDM_ROOT/IDM-VTON"
 source scripts/alaya/env.sh
 ```
 
