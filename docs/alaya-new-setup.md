@@ -81,21 +81,29 @@ costing about 5 extra minutes once. What you cannot do is run the stack *on*
 3.12: `torch==2.0.1` publishes no cp312 wheel at all, and neither do
 `bitsandbytes==0.39.0` or `onnxruntime==1.16.2`.
 
-### 2.1.1 Storage — the field that is empty by default
+### 2.1.1 Storage — provision it before you open this dialog
 
-The Storage row has a volume dropdown, a capacity dropdown, and a **Container
-Path** box. The Container Path box starts blank, and a blank one means **no PVC
-is mounted at all**. Everything then lands on the container's own disk (50 GB on
-the standard H800 flavour), which fills partway through the model download and is
-wiped when the Workshop goes away.
+The Storage row has a type dropdown (`nas-capacity`), a **volume** dropdown, and
+a **Container Path** box.
 
-So before creating:
+**If the volume dropdown says "no data to select", you have no NAS volume yet.**
+Aladdin only lists volumes that already exist; it cannot create one. Go to the
+platform web console → 产品中心 → **存储管理**, create a file/NAS volume of
+**100 GB+** in the *same cluster* as the GPU you'll use (GPU1 per §0), then
+reopen this dialog. If 存储管理 offers no create button, storage has not been
+authorised for your account and an admin has to allocate it.
 
-- pick your `nas-capacity` volume and give it a real size — **100 GB+**, since
-  the weights alone are tens of GB;
-- set **Container Path** to something you'll remember, e.g. `/pvc`;
-- then `export IDM_ROOT=/pvc/idm` in §2.2 (a subdirectory of the mount, so the
-  repo, venv and caches stay tidy under one root).
+Once the volume exists, fill in all three parts:
+
+- volume: the one you just created;
+- capacity: 100 GB+ — the weights alone are tens of GB;
+- **Container Path**: e.g. `/pvc`.
+
+A blank Container Path means **no PVC is mounted at all**. Everything then lands
+on the container's own disk (50 GB on the standard H800 flavour), which fills
+partway through the model download and is wiped when the Workshop goes away.
+Then `export IDM_ROOT=/pvc/idm` in §2.2 — a subdirectory of the mount, so the
+repo, env and caches stay tidy under one root.
 
 Also worth setting: **Namespace** is pre-assigned on a dedicated cluster; on a
 shared cluster see §3.3. GPU count 1 is enough for inference — training
@@ -142,9 +150,20 @@ The `ckpt/*` files in git are **placeholders** — literally files containing
 `put ip adapter ckpt here`. Nothing runs until you replace them.
 
 ```bash
+python scripts/alaya/01_download_checkpoints.py --dry-run   # measure first
 python scripts/alaya/01_download_checkpoints.py             # inference
 python scripts/alaya/01_download_checkpoints.py --training  # + IP-Adapter
 ```
+
+`--dry-run` reads the Hub metadata and prints a per-directory size table without
+downloading a byte — worth running once so you know what you are committing to
+before it starts.
+
+`--slim` skips any `.bin` that has a `.safetensors` twin (same tensors, two
+formats) plus the Flax/TF ports nothing here loads. A `.bin` with no safetensors
+sibling is still downloaded, so nothing the pipeline needs goes missing. On a
+typical diffusers repo this roughly halves the download; combine with
+`--dry-run` to see the exact saving for this repo.
 
 This pulls, via `$HF_ENDPOINT` (defaults to `hf-mirror.com`, because
 huggingface.co is not routable from the cluster):
@@ -363,6 +382,7 @@ These are real and will cost you time otherwise:
 | `torch.cuda.is_available()` is False | Workshop has no GPU attached | check the GPU count in the Workshop settings |
 | `No matching distribution found for torch==2.0.1` | env is on python 3.11/3.12 | `rm -rf $IDM_VENV && bash scripts/alaya/00_bootstrap_workshop.sh` |
 | `No space left on device` mid-download | Container Path was left blank, so there is no PVC | recreate the Workshop with Storage set (§2.1.1) |
+| Storage volume dropdown is empty ("no data to select") | no NAS volume exists yet | create one in 产品中心 → 存储管理 (§2.1.1) |
 | Demo unreachable in the browser | gradio on 127.0.0.1 | `export GRADIO_SERVER_NAME=0.0.0.0`, forward 7860 in PORTS |
 | `kubectl` works, then stops after reopening PowerShell | `$env:KUBECONFIG` is per-window | re-export it |
 | `CUDA out of memory` during generation | 768×1024 is heavy | `--steps 20`, or a Workshop with more VRAM |
