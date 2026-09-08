@@ -11,7 +11,8 @@
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-[ -n "${VIRTUAL_ENV:-}" ] || { echo "Run 'source scripts/alaya/env.sh' first." >&2; exit 1; }
+# Either a venv or the conda env the bootstrap falls back to.
+[ -n "${VIRTUAL_ENV:-}${CONDA_PREFIX:-}" ] || { echo "Run 'source scripts/alaya/env.sh' first." >&2; exit 1; }
 
 DATA_DIR="${IDM_DATA_DIR:-${IDM_ROOT:-/pvc/idm}/data/zalando}"
 OUT_DIR="${IDM_OUTPUT_DIR:-${IDM_ROOT:-/pvc/idm}/result}"

@@ -36,36 +36,68 @@ fi
 mkdir -p "$IDM_ROOT"/{hf,torch,pipcache,cache,data}
 
 # ---------------------------------------------------------------- python ----
-# IDM-VTON targets python 3.10. 3.11+ has no bitsandbytes 0.39.0 wheel and
-# onnxruntime 1.16.2 stops at 3.10 for some platforms.
-PY_BIN=""
-for c in python3.10 python3 python; do
-    if command -v "$c" >/dev/null 2>&1; then
-        v="$("$c" -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
-        if [ "$v" = "3.10" ]; then PY_BIN="$c"; break; fi
-        [ -z "$PY_BIN" ] && PY_BIN="$c"
-    fi
-done
-[ -n "$PY_BIN" ] || { echo "ERROR: no python found in the image." >&2; exit 1; }
+# IDM-VTON needs python 3.10. This is not a preference: torch 2.0.1 publishes no
+# cp311/cp312 wheels at all, and neither do bitsandbytes 0.39.0 or
+# onnxruntime 1.16.2. The Alaya base images ship 3.12, so we usually have to
+# provision 3.10 ourselves via Miniconda (onto the PVC, so it survives).
+find_py310() {
+    for c in python3.10 python3 python; do
+        command -v "$c" >/dev/null 2>&1 || continue
+        if [ "$("$c" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)" = "3.10" ]; then
+            command -v "$c"
+            return 0
+        fi
+    done
+    return 1
+}
 
-PY_VER="$("$PY_BIN" -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
-echo "==> using $PY_BIN (python $PY_VER)"
-if [ "$PY_VER" != "3.10" ]; then
-    echo "WARNING: python $PY_VER, not 3.10. If pip cannot resolve" >&2
-    echo "         bitsandbytes/onnxruntime, pick a Workshop image with 3.10" >&2
-    echo "         or create the env with conda:" >&2
-    echo "           conda create -p $IDM_VENV python=3.10 -y" >&2
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/_activate.sh"
+
+PY_BIN="$(find_py310 || true)"
+USE_CONDA=0
+
+if [ -n "$PY_BIN" ]; then
+    echo "==> image already has python 3.10: $PY_BIN"
+else
+    IMG_PY="$(python3 -V 2>&1 || echo 'none')"
+    echo "==> image python is '$IMG_PY', which cannot run this stack"
+    echo "    provisioning python 3.10 with Miniconda (one-off, ~5 min)"
+    USE_CONDA=1
+    CONDA_DIR="$IDM_ROOT/miniconda"
+    if [ ! -x "$CONDA_DIR/bin/conda" ]; then
+        MINICONDA_URL="${MINICONDA_URL:-https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-latest-Linux-x86_64.sh}"
+        echo "    downloading $MINICONDA_URL"
+        curl -fsSL "$MINICONDA_URL" -o "$IDM_ROOT/miniconda.sh" \
+            || { echo "ERROR: Miniconda download failed. Set MINICONDA_URL to a reachable mirror." >&2; exit 1; }
+        bash "$IDM_ROOT/miniconda.sh" -b -p "$CONDA_DIR"
+        rm -f "$IDM_ROOT/miniconda.sh"
+    else
+        echo "    reusing $CONDA_DIR"
+    fi
 fi
 
-# ------------------------------------------------------------------ venv ----
-if [ ! -f "$IDM_VENV/bin/activate" ]; then
+# ------------------------------------------------------------------- env ----
+if [ -f "$IDM_VENV/bin/activate" ] || [ -d "$IDM_VENV/conda-meta" ]; then
+    echo "==> environment already exists at $IDM_VENV"
+elif [ "$USE_CONDA" = "1" ]; then
+    echo "==> creating conda env (python 3.10) at $IDM_VENV"
+    "$IDM_ROOT/miniconda/bin/conda" create -p "$IDM_VENV" python=3.10 -y
+else
     echo "==> creating venv at $IDM_VENV"
     "$PY_BIN" -m venv "$IDM_VENV"
-else
-    echo "==> venv already exists at $IDM_VENV"
 fi
-# shellcheck disable=SC1091
-source "$IDM_VENV/bin/activate"
+
+idm_activate || { echo "ERROR: could not activate $IDM_VENV" >&2; exit 1; }
+
+ACTUAL_PY="$(python -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
+echo "==> env python $ACTUAL_PY at $(command -v python)"
+if [ "$ACTUAL_PY" != "3.10" ]; then
+    echo "ERROR: env has python $ACTUAL_PY, not 3.10. torch 2.0.1 has no wheel" >&2
+    echo "       for it. Delete $IDM_VENV and re-run, or recreate the Workshop" >&2
+    echo "       from a base image whose Python is 3.10." >&2
+    exit 1
+fi
 
 export PIP_CACHE_DIR="$IDM_ROOT/pipcache"
 [ -n "$PIP_INDEX_URL" ] && pip config set global.index-url "$PIP_INDEX_URL" >/dev/null

@@ -43,11 +43,22 @@ def main():
 
     # ---------------------------------------------------------------- env --
     section("environment")
-    venv = os.environ.get("VIRTUAL_ENV")
+    # The bootstrap builds a venv when the image has python 3.10, and a conda
+    # env at a prefix when it had to provision 3.10 itself.
+    venv = os.environ.get("VIRTUAL_ENV") or os.environ.get("CONDA_PREFIX")
     if venv:
-        ok(f"venv active: {venv}")
+        ok(f"env active: {venv}")
     else:
-        warn("no VIRTUAL_ENV - did you `source scripts/alaya/env.sh`?")
+        warn("neither VIRTUAL_ENV nor CONDA_PREFIX set - "
+             "did you `source scripts/alaya/env.sh`?")
+
+    pyver = "%d.%d" % sys.version_info[:2]
+    if pyver == "3.10":
+        ok(f"python {pyver}")
+    else:
+        fail(f"python {pyver} - torch 2.0.1 has no wheel for it",
+             "recreate the env: rm -rf $IDM_VENV && "
+             "bash scripts/alaya/00_bootstrap_workshop.sh")
 
     idm_root = os.environ.get("IDM_ROOT")
     if idm_root and Path(idm_root).is_dir():

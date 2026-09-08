@@ -37,11 +37,10 @@ export GRADIO_SERVER_PORT="${GRADIO_SERVER_PORT:-7860}"
 # Uncomment to pin the run to one of the allocated GPUs.
 # export CUDA_VISIBLE_DEVICES=0
 
-if [ -f "$IDM_VENV/bin/activate" ]; then
-    # shellcheck disable=SC1091
-    source "$IDM_VENV/bin/activate"
-else
-    echo "[env.sh] No venv at $IDM_VENV - run scripts/alaya/00_bootstrap_workshop.sh first." >&2
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/_activate.sh"
+if ! idm_activate; then
+    echo "[env.sh] No environment at $IDM_VENV - run scripts/alaya/00_bootstrap_workshop.sh first." >&2
 fi
 
 echo "[env.sh] IDM_ROOT=$IDM_ROOT  HF_ENDPOINT=$HF_ENDPOINT  python=$(command -v python)"

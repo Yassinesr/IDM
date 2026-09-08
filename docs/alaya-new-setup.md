@@ -62,17 +62,44 @@ session** — a fresh Workshop is a fresh container.
 
 ### 2.1 Create the Workshop
 
-In VS Code: Aladdin icon → **`+`** next to *Workshop*, then follow the official
-*如何创建Workshop* doc. What matters for this repo:
+In VS Code: Aladdin icon → **`+`** next to *Workshop*. Field by field:
 
-- **Environment**: an official CUDA/PyTorch image. Prefer one with **Python
-  3.10** — `bitsandbytes==0.39.0` and `onnxruntime==1.16.2` have no wheels for
-  newer Pythons on every platform. If you only get 3.11+, the bootstrap script
-  warns and tells you how to fall back to conda.
-- **PVC MOUNTS**: select your storage and remember the mount path.
-- **Namespace**: on a dedicated cluster it is pre-assigned; on a shared cluster
-  see §3.3.
-- GPU count: 1 is enough for inference. Training (`train_xl.sh`) assumes 4.
+| Field | Set it to | Why |
+|---|---|---|
+| **Name** | anything, e.g. `IDM-VTON` | — |
+| **Image** | **Base Image** | you build the env yourself in §2.2 |
+| **Framework / Version** | pytorch, any version | irrelevant — the venv installs its own torch 2.0.1 and ignores the image's |
+| **Python** | **3.10 if the dropdown offers it** | see below |
+| **CUDA** | any | pip torch wheels bundle their own CUDA runtime; only the host driver matters, and it is new enough |
+| **Resource** | GPU, 1× is plenty | an H800-80G has far more VRAM than the ~24 GB this needs |
+| **Storage** | **must be filled in — see §2.1.1** | the default leaves it empty, which is the trap |
+
+**Python is the one field that genuinely constrains you.** Pick 3.10 if it's
+offered. If the only choice is 3.12 (the current Alaya default), that's fine —
+the bootstrap script detects it and provisions 3.10 via Miniconda onto the PVC,
+costing about 5 extra minutes once. What you cannot do is run the stack *on*
+3.12: `torch==2.0.1` publishes no cp312 wheel at all, and neither do
+`bitsandbytes==0.39.0` or `onnxruntime==1.16.2`.
+
+### 2.1.1 Storage — the field that is empty by default
+
+The Storage row has a volume dropdown, a capacity dropdown, and a **Container
+Path** box. The Container Path box starts blank, and a blank one means **no PVC
+is mounted at all**. Everything then lands on the container's own disk (50 GB on
+the standard H800 flavour), which fills partway through the model download and is
+wiped when the Workshop goes away.
+
+So before creating:
+
+- pick your `nas-capacity` volume and give it a real size — **100 GB+**, since
+  the weights alone are tens of GB;
+- set **Container Path** to something you'll remember, e.g. `/pvc`;
+- then `export IDM_ROOT=/pvc/idm` in §2.2 (a subdirectory of the mount, so the
+  repo, venv and caches stay tidy under one root).
+
+Also worth setting: **Namespace** is pre-assigned on a dedicated cluster; on a
+shared cluster see §3.3. GPU count 1 is enough for inference — training
+(`train_xl.sh`) assumes 4.
 
 VS Code opens a new window attached to the Workshop.
 
@@ -298,6 +325,10 @@ These are real and will cost you time otherwise:
 - **Install torch before `requirements.txt`.** `basicsr` imports torch inside
   its own `setup.py`. Both bootstrap paths order it correctly.
 - **`ckpt/*` in git are placeholders**, not weights (§2.4).
+- **Python must be 3.10.** `torch==2.0.1` has no cp311/cp312 wheel, so a 3.12
+  base image cannot run this stack directly. `00_bootstrap_workshop.sh`
+  provisions 3.10 via Miniconda on the PVC when it finds anything else, and
+  refuses to continue if the resulting env is still not 3.10.
 - **The bundled detectron2 is compiled for Python 3.9.**
   `gradio_demo/detectron2/_C.cpython-39-x86_64-linux-gnu.so` will not import on
   3.10 — this is *harmless*. The import sits in a `try/except ImportError` in
@@ -323,6 +354,8 @@ These are real and will cost you time otherwise:
 | `FileNotFoundError` on a `ckpt/...` path | still the placeholder | `python scripts/alaya/01_download_checkpoints.py` |
 | `RuntimeError: Numpy is not available` | NumPy 2 got pulled in | `pip install "numpy==1.26.4"` |
 | `torch.cuda.is_available()` is False | Workshop has no GPU attached | check the GPU count in the Workshop settings |
+| `No matching distribution found for torch==2.0.1` | env is on python 3.11/3.12 | `rm -rf $IDM_VENV && bash scripts/alaya/00_bootstrap_workshop.sh` |
+| `No space left on device` mid-download | Container Path was left blank, so there is no PVC | recreate the Workshop with Storage set (§2.1.1) |
 | Demo unreachable in the browser | gradio on 127.0.0.1 | `export GRADIO_SERVER_NAME=0.0.0.0`, forward 7860 in PORTS |
 | `kubectl` works, then stops after reopening PowerShell | `$env:KUBECONFIG` is per-window | re-export it |
 | `CUDA out of memory` during generation | 768×1024 is heavy | `--steps 20`, or a Workshop with more VRAM |
@@ -336,6 +369,7 @@ These are real and will cost you time otherwise:
 | File | Purpose |
 |---|---|
 | `scripts/alaya/env.sh` | per-session env: PVC paths, caches, HF mirror |
+| `scripts/alaya/_activate.sh` | activates either the venv or the conda fallback |
 | `scripts/alaya/00_bootstrap_workshop.sh` | build the venv on the PVC (Path A) |
 | `scripts/alaya/01_download_checkpoints.py` | fetch all weights, mirror-aware |
 | `scripts/alaya/preflight.py` | PASS/FAIL environment check; paste its output when stuck |
