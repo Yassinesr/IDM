@@ -125,9 +125,53 @@ huggingface.co is not routable from the cluster):
 
 The download is resumable — if it drops, just run it again.
 
-### 2.5 Run
+### 2.5 Verify before you burn GPU time
 
-**Gradio demo:**
+```bash
+python scripts/alaya/preflight.py
+```
+
+One PASS/FAIL line per check: venv, PVC paths, free disk, GPU and VRAM, the
+version pins, and whether each `ckpt/*` file is real or still a placeholder. If
+something is wrong, paste the whole output when asking for help — it is meant to
+be the only thing needed to diagnose a Workshop.
+
+### 2.6 Run one image, headlessly
+
+Do this **before** the gradio demo. It runs the identical pipeline from the
+terminal on the examples already bundled in the repo, so a broken environment
+surfaces as a stack trace instead of a blank browser tab — and there is no port
+forwarding in the way.
+
+```bash
+python scripts/alaya/demo_single.py                 # writes demo_out.png
+python scripts/alaya/demo_single.py --list          # 9 people, 16 garments
+```
+
+Pick your own pair, and describe the garment — the description goes into the
+prompt, so it changes the result:
+
+```bash
+python scripts/alaya/demo_single.py \
+    --human   "gradio_demo/example/human/00034_00.jpg" \
+    --garment "gradio_demo/example/cloth/04469_00.jpg" \
+    --desc    "a red short-sleeve t-shirt" \
+    --output  "$IDM_ROOT/out/demo.png" --save-mask
+```
+
+Useful flags: `--steps` (30 default, 20 is faster and usually fine), `--seed`,
+`--category {upper_body,lower_body,dresses}`, `--crop` for phone photos that are
+not already 3:4, and `--save-mask` when a result looks wrong — a bad
+auto-generated mask is the usual cause.
+
+The **first** run downloads the model, so it takes a while and most of that is
+network, not GPU. Later runs reuse the PVC cache. The script prints load time,
+generate time and peak GPU memory.
+
+To look at the PNG: it is on the PVC, so the VS Code Explorer in the Workshop
+window opens it directly — click the file.
+
+### 2.7 Run the gradio demo
 
 ```bash
 bash scripts/alaya/02_run_gradio.sh
@@ -137,7 +181,7 @@ It binds `0.0.0.0:7860`. VS Code's **PORTS** panel forwards it to your laptop
 automatically; if it doesn't, *Forward a Port* → `7860` and open the localhost
 link.
 
-**Batch inference on VITON-HD:**
+### 2.8 Batch inference on VITON-HD
 
 ```bash
 export IDM_DATA_DIR=$IDM_ROOT/data/zalando   # per the README layout
@@ -147,7 +191,7 @@ bash scripts/alaya/03_run_inference.sh       # add --paired for the paired setti
 This exists because the repo's own `inference.sh` hardcodes
 `/home/omnious/workspace/yisol/...`, which does not exist on your Workshop.
 
-**Training** still uses the repo's `train_xl.sh`; edit `--data_dir` in it, and
+Training still uses the repo's `train_xl.sh`; edit `--data_dir` in it, and
 note it sets `CUDA_VISIBLE_DEVICES=0,1,2,3`.
 
 ---
@@ -281,6 +325,9 @@ These are real and will cost you time otherwise:
 | `torch.cuda.is_available()` is False | Workshop has no GPU attached | check the GPU count in the Workshop settings |
 | Demo unreachable in the browser | gradio on 127.0.0.1 | `export GRADIO_SERVER_NAME=0.0.0.0`, forward 7860 in PORTS |
 | `kubectl` works, then stops after reopening PowerShell | `$env:KUBECONFIG` is per-window | re-export it |
+| `CUDA out of memory` during generation | 768×1024 is heavy | `--steps 20`, or a Workshop with more VRAM |
+| Try-on output looks wrong / garment in the wrong place | bad auto-mask | `--save-mask` and inspect; try `--category`, or `--crop` |
+| `FileNotFoundError: ./configs/densepose_...yaml` | run from the wrong directory | `demo_single.py` chdirs for you; for `app.py`, run from the repo root |
 
 ---
 
@@ -291,6 +338,8 @@ These are real and will cost you time otherwise:
 | `scripts/alaya/env.sh` | per-session env: PVC paths, caches, HF mirror |
 | `scripts/alaya/00_bootstrap_workshop.sh` | build the venv on the PVC (Path A) |
 | `scripts/alaya/01_download_checkpoints.py` | fetch all weights, mirror-aware |
+| `scripts/alaya/preflight.py` | PASS/FAIL environment check; paste its output when stuck |
+| `scripts/alaya/demo_single.py` | headless one-image try-on, no browser needed |
 | `scripts/alaya/02_run_gradio.sh` | launch the demo with port forwarding |
 | `scripts/alaya/03_run_inference.sh` | VITON-HD inference with PVC paths |
 | `scripts/alaya/k8s_bootstrap.sh` | namespace + pull secret + SA patch (Path B) |
