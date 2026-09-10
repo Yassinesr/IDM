@@ -93,9 +93,10 @@ idm_activate || { echo "ERROR: could not activate $IDM_VENV" >&2; exit 1; }
 ACTUAL_PY="$(python -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
 echo "==> env python $ACTUAL_PY at $(command -v python)"
 if [ "$ACTUAL_PY" != "3.10" ]; then
-    echo "ERROR: env has python $ACTUAL_PY, not 3.10. torch 2.0.1 has no wheel" >&2
-    echo "       for it. Delete $IDM_VENV and re-run, or recreate the Workshop" >&2
-    echo "       from a base image whose Python is 3.10." >&2
+    echo "ERROR: this environment is python $ACTUAL_PY, not 3.10." >&2
+    echo "       It is probably left over from an earlier run. Delete and retry:" >&2
+    echo "         rm -rf $IDM_VENV" >&2
+    echo "         bash scripts/alaya/00_bootstrap_workshop.sh" >&2
     exit 1
 fi
 
@@ -104,12 +105,57 @@ export PIP_CACHE_DIR="$IDM_ROOT/pipcache"
 pip install --upgrade pip setuptools wheel
 
 # ----------------------------------------------------------------- torch ----
+# torch and torchvision must be a matching pair; pip will not work that out on
+# its own, so map them explicitly.
+tv_for() {
+    case "$1" in
+        2.0.1) echo 0.15.2 ;;
+        2.2.2) echo 0.17.2 ;;
+        2.4.1) echo 0.19.1 ;;
+        2.5.1) echo 0.20.1 ;;
+        *)     echo "" ;;
+    esac
+}
+
+# Preference order. 2.0.1 is what environment.yaml specifies, but nothing in
+# this project actually requires it: the only dependency that needed
+# torchvision < 0.17 was basicsr, which is never imported (see requirements.txt).
+# The fallbacks exist because some mirrors do not carry 2.0.1 at all -
+# mirror.sjtu.edu.cn/pytorch-wheels/cu118 starts at 2.2.0.
+# Keep every candidate on cu118 or newer: an H800 is sm_90, which cu117 builds
+# have no kernels for.
+TORCH_CANDIDATES="${TORCH_VERSION:-2.0.1 2.2.2 2.4.1 2.5.1}"
+
 if python -c 'import torch' 2>/dev/null; then
     echo "==> torch already installed: $(python -c 'import torch;print(torch.__version__)')"
 else
-    echo "==> installing torch 2.0.1 + cu118 from $TORCH_INDEX_URL"
-    pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 \
-        --index-url "$TORCH_INDEX_URL"
+    echo "==> looking for torch on $TORCH_INDEX_URL"
+    AVAIL="$(pip index versions torch --index-url "$TORCH_INDEX_URL" 2>/dev/null || true)"
+    PICK=""
+    for cand in $TORCH_CANDIDATES; do
+        # An empty AVAIL means the probe is unsupported, not that nothing is
+        # there - fall through to the first candidate and let pip decide.
+        if [ -z "$AVAIL" ] || printf '%s' "$AVAIL" | grep -qF "$cand"; then
+            PICK="$cand"; break
+        fi
+    done
+
+    if [ -z "$PICK" ]; then
+        echo "ERROR: none of [$TORCH_CANDIDATES] are on $TORCH_INDEX_URL" >&2
+        echo "$AVAIL" >&2
+        echo "       The official index carries all of them:" >&2
+        echo "         TORCH_INDEX_URL=https://download.pytorch.org/whl/cu118 \\" >&2
+        echo "           bash scripts/alaya/00_bootstrap_workshop.sh" >&2
+        exit 1
+    fi
+
+    TV="$(tv_for "$PICK")"
+    [ -n "$TV" ] || { echo "ERROR: no torchvision mapping for torch $PICK" >&2; exit 1; }
+    if [ "$PICK" != "2.0.1" ]; then
+        echo "    2.0.1 is not on this index; using torch $PICK + torchvision $TV"
+    fi
+    echo "==> installing torch $PICK + torchvision $TV"
+    pip install "torch==$PICK" "torchvision==$TV" --index-url "$TORCH_INDEX_URL"
 fi
 
 # ------------------------------------------------------------------ deps ----

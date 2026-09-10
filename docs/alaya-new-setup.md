@@ -129,10 +129,32 @@ bash scripts/alaya/00_bootstrap_workshop.sh
 ```
 
 That builds the environment on the PVC — a plain venv if the image already has
-python 3.10, otherwise a Miniconda-provisioned 3.10 env (§2.1) — installs
-torch 2.0.1+cu118 and `requirements.txt`, and prints the GPUs it can see. It is
-idempotent: re-run it after a Workshop rebuild and pip serves most of it from
-the PVC cache.
+python 3.10, otherwise a Miniconda-provisioned 3.10 env (§2.1) — installs torch
+and `requirements.txt`, and prints the GPUs it can see. It is idempotent: re-run
+it after a Workshop rebuild and pip serves most of it from the PVC cache.
+
+Two overrides, if the defaults don't suit your cluster:
+
+```bash
+# use a different wheel index (default: https://download.pytorch.org/whl/cu118)
+TORCH_INDEX_URL=https://mirror.sjtu.edu.cn/pytorch-wheels/cu118 \
+    bash scripts/alaya/00_bootstrap_workshop.sh
+# force a specific torch version
+TORCH_VERSION=2.4.1 bash scripts/alaya/00_bootstrap_workshop.sh
+```
+
+The script asks the index which torch versions it has and takes the first of
+`2.0.1 2.2.2 2.4.1 2.5.1` that is present, mapping torchvision to match. It
+prefers 2.0.1 because that is what `environment.yaml` names, but nothing here
+actually requires it (§4), and some mirrors don't carry it —
+`mirror.sjtu.edu.cn` starts at 2.2.0. Every candidate is cu118 or newer, because
+an H800 is sm_90 and cu117 builds have no kernels for it.
+
+For training, add the extra dependency afterwards:
+
+```bash
+pip install -r requirements-train.txt
+```
 
 ### 2.3 Every session after that
 
@@ -348,8 +370,18 @@ These are real and will cost you time otherwise:
   download. `requirements.txt` pins `0.25.2`.
 - **`numpy` must stay on 1.x.** torch 2.0.1 is not built against the NumPy 2
   ABI. Pinned to `1.26.4`.
-- **Install torch before `requirements.txt`.** `basicsr` imports torch inside
-  its own `setup.py`. Both bootstrap paths order it correctly.
+- **torch 2.0.1 is a preference, not a requirement.** `environment.yaml` names
+  it, but the only dependency that constrained torch was `basicsr`, which
+  imports `torchvision.transforms.functional_tensor` (removed in torchvision
+  0.17). `basicsr` is never actually imported here — the single import site is a
+  lazy one in `preprocess/openpose/annotator/openpose/__init__.py`, reached only
+  when `ckpt/openpose/ckpts/body_pose_model.pth` is missing, and the download
+  script always puts it there. So it is dropped from `requirements.txt`, and
+  newer torch works.
+- **`torchaudio` and `bitsandbytes` are not inference dependencies.**
+  `torchaudio` has zero import sites in this repo. `bitsandbytes` is imported
+  lazily in `train_xl.py` under `--use_8bit_adam` only, so it lives in
+  `requirements-train.txt`.
 - **`ckpt/*` in git are placeholders**, not weights (§2.4).
 - **Python must be 3.10.** `torch==2.0.1` has no cp311/cp312 wheel, so a 3.12
   base image cannot run this stack directly. `00_bootstrap_workshop.sh`
@@ -380,7 +412,10 @@ These are real and will cost you time otherwise:
 | `FileNotFoundError` on a `ckpt/...` path | still the placeholder | `python scripts/alaya/01_download_checkpoints.py` |
 | `RuntimeError: Numpy is not available` | NumPy 2 got pulled in | `pip install "numpy==1.26.4"` |
 | `torch.cuda.is_available()` is False | Workshop has no GPU attached | check the GPU count in the Workshop settings |
-| `No matching distribution found for torch==2.0.1` | env is on python 3.11/3.12 | `rm -rf $IDM_VENV && bash scripts/alaya/00_bootstrap_workshop.sh` |
+| `No matching distribution found for torch==2.0.1`, and the listed versions all start at 2.2 | the mirror does not carry 2.0.1 | nothing to do — current bootstrap falls back automatically; or `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu118` |
+| `No matching distribution found for torch==2.0.1`, and no versions are listed | env is on python 3.11/3.12 | `rm -rf $IDM_VENV && bash scripts/alaya/00_bootstrap_workshop.sh` |
+| `venv already exists` but it is the wrong python | stale env from an earlier attempt | `rm -rf $IDM_VENV` and re-run the bootstrap |
+| `no kernel image is available for execution on the device` | cu117 torch on an sm_90 GPU | reinstall from a cu118+ index |
 | `No space left on device` mid-download | Container Path was left blank, so there is no PVC | recreate the Workshop with Storage set (§2.1.1) |
 | Storage volume dropdown is empty ("no data to select") | no NAS volume exists yet | create one in 产品中心 → 存储管理 (§2.1.1) |
 | Demo unreachable in the browser | gradio on 127.0.0.1 | `export GRADIO_SERVER_NAME=0.0.0.0`, forward 7860 in PORTS |
@@ -405,4 +440,5 @@ These are real and will cost you time otherwise:
 | `scripts/alaya/03_run_inference.sh` | VITON-HD inference with PVC paths |
 | `scripts/alaya/k8s_bootstrap.sh` | namespace + pull secret + SA patch (Path B) |
 | `Dockerfile`, `.dockerignore` | custom image (Path B) |
-| `requirements.txt` | pip deps with the pins that matter |
+| `requirements.txt` | inference pip deps, with the pins that matter |
+| `requirements-train.txt` | adds `bitsandbytes` for `train_xl.py` |

@@ -1,16 +1,19 @@
-# IDM-VTON pip dependencies (mirrors the `pip:` section of environment.yaml).
+# IDM-VTON inference dependencies.
 #
 # IMPORTANT: install PyTorch FIRST, then this file.
-#   pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 \
+#   pip install torch==2.0.1 torchvision==0.15.2 \
 #       --index-url https://download.pytorch.org/whl/cu118
 #   pip install -r requirements.txt
-# `basicsr` imports torch inside its setup.py, so it fails if torch is absent.
+# scripts/alaya/00_bootstrap_workshop.sh does both in the right order and
+# picks a torch version its index actually carries.
+#
+# For training, also: pip install -r requirements-train.txt
 
 # --- pins that are NOT optional -------------------------------------------
 # diffusers 0.25.0 does `from huggingface_hub import cached_download`, which was
 # removed in huggingface_hub 0.26.0. Anything >=0.26 breaks on import.
 huggingface_hub==0.25.2
-# torch 2.0.1 is not built against the NumPy 2 ABI.
+# torch < 2.3 is not built against the NumPy 2 ABI.
 numpy==1.26.4
 # src/*_hacked_*.py subclass diffusers/transformers internals; these two pins
 # must match what the paper's code was written against.
@@ -22,7 +25,6 @@ accelerate==0.25.0
 torchmetrics==1.2.1
 tqdm==4.66.1
 einops==0.7.0
-bitsandbytes==0.39.0
 scipy==1.11.1
 opencv-python
 gradio==4.24.0
@@ -30,8 +32,18 @@ fvcore
 cloudpickle
 omegaconf
 pycocotools
-basicsr
 av
 # CPU provider only - preprocess/humanparsing/run_parsing.py hardcodes
 # providers=['CPUExecutionProvider'].
 onnxruntime==1.16.2
+
+# Deliberately NOT here, though environment.yaml lists them:
+#   torchaudio  - zero import sites in this repo.
+#   basicsr     - the only import is a lazy one in
+#                 preprocess/openpose/annotator/openpose/__init__.py, taken
+#                 only when ckpt/openpose/ckpts/body_pose_model.pth is missing.
+#                 01_download_checkpoints.py always puts it there, so the branch
+#                 is dead. Worth keeping out: basicsr imports
+#                 torchvision.transforms.functional_tensor, which was removed in
+#                 torchvision 0.17, so having it would pin us to old torch.
+#   bitsandbytes - training only, see requirements-train.txt.
