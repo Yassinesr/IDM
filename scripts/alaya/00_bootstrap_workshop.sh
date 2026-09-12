@@ -33,7 +33,29 @@ if ! mountpoint -q "$IDM_ROOT" 2>/dev/null && [ ! -d "$IDM_ROOT" ]; then
     exit 1
 fi
 
+# A directory existing is not proof it is a PVC: `mkdir -p /pvc/idm` on the
+# container's own root filesystem looks identical and silently works, right up
+# until the Workshop is released and tens of GB of weights vanish with it. The
+# platform is explicit about this - 系统盘为临时工作空间，变更内容在容器实例
+# 释放后消失. Compare device numbers: same device as / means no PVC.
+if [ "$(stat -c %d "$IDM_ROOT" 2>/dev/null)" = "$(stat -c %d / 2>/dev/null)" ]; then
+    echo "ERROR: $IDM_ROOT is on the container's root filesystem, not a PVC." >&2
+    echo "       That disk is ephemeral and far too small for the weights." >&2
+    echo "" >&2
+    echo "       Filesystems actually mounted here:" >&2
+    df -h | grep -v "^tmpfs" | sed 's/^/         /' >&2
+    echo "" >&2
+    echo "       Fix: recreate the Workshop with Storage > Container Path set" >&2
+    echo "       (see docs/alaya-new-setup.md section 2.1.1), then point" >&2
+    echo "       IDM_ROOT at that mount." >&2
+    echo "       To proceed anyway: IDM_ALLOW_EPHEMERAL=1 bash \$0" >&2
+    [ "${IDM_ALLOW_EPHEMERAL:-0}" = "1" ] || exit 1
+    echo "WARNING: IDM_ALLOW_EPHEMERAL=1 - continuing on ephemeral disk." >&2
+fi
+
 mkdir -p "$IDM_ROOT"/{hf,torch,pipcache,cache,data}
+# HF_HOME may point outside IDM_ROOT when the cache is shared.
+[ -n "${IDM_SHARED_HF:-}" ] && mkdir -p "$IDM_SHARED_HF"
 
 # ---------------------------------------------------------------- python ----
 # IDM-VTON needs python 3.10. This is not a preference: torch 2.0.1 publishes no

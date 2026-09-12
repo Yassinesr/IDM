@@ -84,6 +84,26 @@ def main():
 
     # -------------------------------------------------------------- disk ---
     section("disk")
+    if idm_root and Path(idm_root).is_dir():
+        try:
+            # Same device as / means this is the container's own ephemeral disk,
+            # not a PVC - a plain mkdir looks identical until the Workshop is
+            # released and the weights go with it.
+            if os.stat(idm_root).st_dev == os.stat("/").st_dev:
+                fail(f"{idm_root} is on the container root filesystem, not a PVC",
+                     "recreate the Workshop with Storage > Container Path set")
+            else:
+                ok(f"{idm_root} is a real mount, separate from /")
+        except OSError as exc:
+            warn(f"could not stat {idm_root}: {exc}")
+
+    # Alaya mounts a read-only library of common models/datasets here. Worth a
+    # look before downloading tens of GB over a slow link.
+    public = Path("/root/public")
+    if public.is_dir():
+        ok(f"{public} exists (read-only shared models/datasets) - "
+           "check it before downloading")
+
     for label, path in [("IDM_ROOT", idm_root), ("/tmp", "/tmp")]:
         if not path:
             continue
