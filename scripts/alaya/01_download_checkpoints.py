@@ -74,6 +74,29 @@ def slim_ignore_patterns(sizes):
     return ignore
 
 
+def cached_bytes(repo_id, repo_type="model"):
+    """Bytes already present in the local cache for this repo.
+
+    Only real files count: everything under snapshots/ is a symlink into
+    blobs/, so counting both would double every file.
+    """
+    hub = os.environ.get("HUGGINGFACE_HUB_CACHE")
+    if not hub:
+        home = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+        hub = os.path.join(home, "hub")
+    folder = Path(hub) / f"{repo_type}s--{repo_id.replace('/', '--')}"
+    if not folder.is_dir():
+        return 0
+    total = 0
+    for f in folder.rglob("*"):
+        try:
+            if f.is_file() and not f.is_symlink():
+                total += f.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
 def report_sizes(sizes, ignore=None):
     """Print a per-directory size table; returns the total that would download."""
     from fnmatch import fnmatch
@@ -194,14 +217,22 @@ def main() -> int:
             pass  # metadata unavailable; fall through and let it run
 
         if need:
+            # Whatever is already cached will not be fetched again, so it must
+            # not count towards what we need free - otherwise a resumed run is
+            # refused precisely because the previous one succeeded.
+            have = cached_bytes(MODEL_REPO)
+            remaining = max(0, need - have)
+
             target = Path(os.environ.get("HF_HOME") or Path.home() / ".cache/huggingface")
             probe = target
             while not probe.exists() and probe != probe.parent:
                 probe = probe.parent
             free = shutil.disk_usage(probe).free
-            headroom = need * 1.15  # unpacking and .incomplete files need slack
-            print(f"\n[disk] need ~{need / 2**30:.1f} GB, free {free / 2**30:.1f} GB "
-                  f"on {probe}")
+            headroom = remaining * 1.15  # .incomplete files need slack
+            print(f"\n[disk] repo {need / 2**30:.1f} GB, already cached "
+                  f"{have / 2**30:.1f} GB, still to fetch "
+                  f"{remaining / 2**30:.1f} GB; free {free / 2**30:.1f} GB on {probe}")
+            need = remaining
             if free < headroom:
                 print(f"\nERROR: not enough free space for the model.", file=sys.stderr)
                 print(f"       need ~{headroom / 2**30:.1f} GB including slack, "
