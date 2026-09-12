@@ -19,3 +19,23 @@ idm_activate() {
     fi
     return 1
 }
+
+# Deleting $IDM_VENV does not undo a previous activation in the same shell: its
+# bin/ stays on PATH, bash's command hash still maps `python` to a file that no
+# longer exists, and VIRTUAL_ENV still advertises it. The result is a confusing
+# "No such file or directory" for a python that is plainly on PATH. Call this
+# when activation fails, to leave the shell in a clean state.
+idm_clean_stale() {
+    case ":$PATH:" in
+        *":$IDM_VENV/bin:"*)
+            PATH="$(printf '%s' "$PATH" | tr ':' '\n' \
+                    | grep -vxF "$IDM_VENV/bin" | paste -sd: -)"
+            export PATH
+            echo "[env.sh] removed the deleted $IDM_VENV/bin from PATH" >&2
+            ;;
+    esac
+    [ -n "${VIRTUAL_ENV:-}" ] && [ ! -d "${VIRTUAL_ENV}" ] && unset VIRTUAL_ENV
+    [ -n "${CONDA_PREFIX:-}" ] && [ ! -d "${CONDA_PREFIX}" ] && unset CONDA_PREFIX
+    hash -r 2>/dev/null || true
+    return 0
+}

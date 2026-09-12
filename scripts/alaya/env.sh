@@ -63,7 +63,10 @@ export GRADIO_SERVER_PORT="${GRADIO_SERVER_PORT:-7860}"
 # shellcheck disable=SC1091
 source "$(dirname "${BASH_SOURCE[0]}")/_activate.sh"
 if ! idm_activate; then
-    echo "[env.sh] No environment at $IDM_VENV - run scripts/alaya/00_bootstrap_workshop.sh first." >&2
+    idm_clean_stale
+    echo "[env.sh] No environment at $IDM_VENV - run this first:" >&2
+    echo "         bash scripts/alaya/00_bootstrap_workshop.sh" >&2
+    echo "         (your prompt may still say (venv) until you start a new shell)" >&2
 fi
 
 echo "[env.sh] IDM_ROOT=$IDM_ROOT  HF_HOME=$HF_HOME  python=$(command -v python)"
