@@ -43,6 +43,21 @@ for t in mount.nfs mount.cifs sshfs rclone s3fs; do
 done
 
 echo
+echo "== what storage does this platform actually use? =="
+FOUND_BACKEND=""
+while read -r src mnt fstype opts _; do
+    case "$fstype" in
+        nfs|nfs4|ceph|cephfs|glusterfs)
+            echo "  $fstype at $mnt"
+            echo "      source: $src"
+            echo "      opts:   $opts"
+            FOUND_BACKEND="$fstype" ;;
+    esac
+done < /proc/mounts
+[ -n "$FOUND_BACKEND" ] || echo "  no network filesystem mounted here"
+[ -d /etc/ceph ] && echo "  /etc/ceph exists: $(ls /etc/ceph 2>/dev/null | tr '\n' ' ')"
+
+echo
 echo "== live test =="
 TESTDIR="$(mktemp -d)"
 if mount -t tmpfs -o size=1M tmpfs "$TESTDIR" 2>/tmp/.mnterr; then
@@ -79,20 +94,53 @@ Either way the weights are the expensive part, so get the PVC attached before
 downloading them.
 EOF
 else
-    cat <<'EOF'
-== verdict: mounting might be possible ==
+    echo "== verdict: the mount syscall is permitted =="
+    echo
+    case "$FOUND_BACKEND" in
+        ceph|cephfs)
+            cat <<'EOF'
+This platform uses CephFS, not NFS. That matters: a CephFS mount needs a client
+name AND a secret key, which the platform holds and does not hand to the
+container. Without the key you cannot mount another volume by hand, even though
+the syscall itself is allowed.
 
-This container can mount. If your NAS speaks NFS and is routable from here:
+Check whether a key was left where you can read it:
+
+    cat /proc/mounts | grep ceph          # look for a name= option
+    ls -l /etc/ceph/ 2>/dev/null          # keyring, if any
+
+If there is no keyring, attach the volume through the platform instead: stop
+the Workshop (关机, NOT 释放), add the mount in Aladdin, start it again.
+EOF
+            ;;
+        nfs|nfs4)
+            cat <<'EOF'
+This platform speaks NFS, which needs no credentials, so a hand mount can work.
+Set these from the platform's 存储管理 page first - assigning variables avoids
+pasting angle brackets, which bash reads as redirects:
+
+    NFS_SERVER=10.x.x.x
+    NFS_EXPORT=/exports/your/volume
 
     apt-get update && apt-get install -y nfs-common
     mkdir -p /pvc
-    mount -t nfs <server>:/<export> /pvc
+    mount -t nfs "$NFS_SERVER:$NFS_EXPORT" /pvc
     mount | grep /pvc
+EOF
+            ;;
+        *)
+            cat <<'EOF'
+No network filesystem is mounted here, so there is nothing to copy settings
+from. Get the server address and export path from the platform's 存储管理 page.
+Assign them to variables rather than pasting placeholders - bash treats a bare
+<word> as a redirect, which is where "No such file or directory" comes from.
+EOF
+            ;;
+    esac
+    cat <<'EOF'
 
-Get <server>:/<export> from the platform's 存储管理 page. Two caveats: a
-hand-made mount does not survive a restart (re-run it each session, or the
-platform may not allow it at all), and it bypasses whatever quota accounting
-the platform does. Attaching the volume properly at Workshop creation is still
-the durable answer.
+Either way, two caveats on a hand-made mount: it does not survive a restart, so
+it must be re-applied every session, and it bypasses the platform's quota
+accounting. Attaching the volume at Workshop creation remains the durable fix.
 EOF
 fi
