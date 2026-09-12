@@ -96,15 +96,32 @@ def report_sizes(sizes, ignore=None):
 def place(cached: str, rel_dest: str) -> None:
     dest = REPO / rel_dest
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists() and dest.stat().st_size > PLACEHOLDER_MAX:
-        print(f"    kept {rel_dest} ({dest.stat().st_size / 2**20:.1f} MiB)")
-        return
-    if dest.exists():
-        dest.unlink()  # drop the placeholder
+
+    # hf_hub_download returns a path under snapshots/, which is a SYMLINK into
+    # blobs/ with a *relative* target. Hard-linking that symlink copies the link
+    # rather than the file, and its relative target does not resolve from ckpt/,
+    # so the result is a dangling symlink that only fails later. Resolve to the
+    # real blob first.
+    src = os.path.realpath(cached)
+    if not os.path.isfile(src):
+        raise FileNotFoundError(f"{cached} does not resolve to a file (-> {src})")
+
+    # lexists, not exists: a dangling symlink from an earlier run is invisible to
+    # exists(), which would leave it in place and make os.link fail with EEXIST.
+    if os.path.lexists(dest):
+        if not dest.is_symlink() and dest.is_file() \
+                and dest.stat().st_size > PLACEHOLDER_MAX:
+            print(f"    kept {rel_dest} ({dest.stat().st_size / 2**20:.1f} MiB)")
+            return
+        os.unlink(dest)  # placeholder, or a dangling link from a failed run
+
     try:
-        os.link(cached, dest)  # same filesystem: free
+        os.link(src, dest)  # same filesystem: free
     except OSError:
-        shutil.copy2(cached, dest)
+        shutil.copy2(src, dest)
+
+    if not dest.is_file():
+        raise RuntimeError(f"could not place {rel_dest} from {src}")
     print(f"    -> {rel_dest} ({dest.stat().st_size / 2**20:.1f} MiB)")
 
 
