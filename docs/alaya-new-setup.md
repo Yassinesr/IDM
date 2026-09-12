@@ -17,6 +17,66 @@ Two ways to get an environment into it:
 
 ---
 
+## Quickstart — I just created a CCI, now what?
+
+Run these in order. Step 1 decides everything else, so do not skip it.
+
+```bash
+# 1. Is persistent storage attached? (no repo needed yet)
+df -h | grep -v tmpfs
+```
+
+Look for a mount that is **not** `/` and **not** `/root/public`. Typically
+`/pvc`.
+
+| What you see | What it means | Go to |
+|---|---|---|
+| a large writable mount, e.g. `/pvc` | storage attached | step 2 |
+| only `/` and `/root/public` | **no storage** — anything you build is lost on release | §2.1.1 |
+
+```bash
+# 2. Get the repo. From China, prefer the bundle (§2.2) - this clone is slow.
+export IDM_ROOT=/pvc/idm          # <- your real mount + /idm
+mkdir -p "$IDM_ROOT" && cd "$IDM_ROOT"
+git clone -b claude/alaya-new-cloud-setup-4ode4d \
+    https://github.com/Yassinesr/IDM.git IDM
+cd IDM
+
+# 3. Confirm storage properly, and that the mount really persists
+bash scripts/alaya/check_storage.sh
+
+# 4. Build the environment (~15 min; provisions python 3.10 if the image is 3.12)
+bash scripts/alaya/00_bootstrap_workshop.sh
+source scripts/alaya/env.sh
+
+# 5. Look for the weights locally before downloading tens of GB
+python scripts/alaya/find_local_models.py
+
+# 6a. If step 5 found a model:
+export IDM_MODEL_PATH=<path it printed>
+python scripts/alaya/01_download_checkpoints.py --skip-model
+
+# 6b. If it did not:
+python scripts/alaya/01_download_checkpoints.py --dry-run   # check the size first
+python scripts/alaya/01_download_checkpoints.py
+
+# 7. Check, then generate
+python scripts/alaya/preflight.py
+python scripts/alaya/demo_single.py --output "$IDM_ROOT/out/demo.png"
+```
+
+Three things that have caught people out, each covered below:
+
+- **Storage is two steps.** Creating a volume in 存储管理 and attaching it to a
+  Workshop via the **Container Path** field are separate; doing only the first
+  looks fine until the container is released (§2.1.1).
+- **The base images ship python 3.12**, which this stack cannot run. The
+  bootstrap provisions 3.10 itself (§2.1).
+- **Stopping is not releasing.** 关机 auto-saves an image and keeps your disk;
+  释放 discards it (§2.1.3).
+
+---
+
 ## 0. Before you start
 
 1. **Accounts.** Log in to the platform, then install the **Aladdin** extension
@@ -145,32 +205,6 @@ shared cluster see §3.3. GPU count 1 is enough for inference — training
 
 VS Code opens a new window attached to the Workshop.
 
-### 2.1.1a Can I add storage without recreating the Workshop?
-
-Sometimes. Check rather than assume:
-
-```bash
-bash scripts/alaya/check_mount_capability.sh
-```
-
-Being root in a container is not enough to mount anything — `mount()` needs
-`CAP_SYS_ADMIN`, which Kubernetes drops for unprivileged pods, and FUSE needs
-`/dev/fuse`. The script reports both, then settles it by actually mounting a
-tmpfs.
-
-Two things worth knowing before assuming a rebuild is required:
-
-- **Stopping is not releasing.** The login banner says
-  *系统盘为临时工作空间，变更内容在容器实例释放后消失，在关机时自动保存镜像* —
-  the container disk is lost when the instance is **released** (释放), but an
-  image is auto-saved on **shutdown** (关机). So a graceful stop/start keeps
-  your work. Do not rely on it for tens of GB of weights, but it does mean a
-  Workshop can often be stopped, edited to add a mount, and started again
-  rather than rebuilt.
-- **A hand-made mount is not a PVC.** Even where `mount -t nfs` works, it does
-  not survive a restart, and it sidesteps the platform's quota accounting.
-  Fine as a stopgap; not the durable answer.
-
 ### 2.1.2 Verify storage before anything else
 
 The moment a new Workshop opens, before cloning or building:
@@ -198,6 +232,32 @@ look for it next session:
 ```bash
 echo "written $(date -Is)" > /pvc/.idm-persistence-check
 ```
+
+### 2.1.3 If no storage is attached, must I rebuild?
+
+Sometimes. Check rather than assume:
+
+```bash
+bash scripts/alaya/check_mount_capability.sh
+```
+
+Being root in a container is not enough to mount anything — `mount()` needs
+`CAP_SYS_ADMIN`, which Kubernetes drops for unprivileged pods, and FUSE needs
+`/dev/fuse`. The script reports both, then settles it by actually mounting a
+tmpfs.
+
+Two things worth knowing before assuming a rebuild is required:
+
+- **Stopping is not releasing.** The login banner says
+  *系统盘为临时工作空间，变更内容在容器实例释放后消失，在关机时自动保存镜像* —
+  the container disk is lost when the instance is **released** (释放), but an
+  image is auto-saved on **shutdown** (关机). So a graceful stop/start keeps
+  your work. Do not rely on it for tens of GB of weights, but it does mean a
+  Workshop can often be stopped, edited to add a mount, and started again
+  rather than rebuilt.
+- **A hand-made mount is not a PVC.** Even where `mount -t nfs` works, it does
+  not survive a restart, and it sidesteps the platform's quota accounting.
+  Fine as a stopgap; not the durable answer.
 
 ### 2.2 Set up the environment
 
@@ -254,7 +314,36 @@ cd "$IDM_ROOT/IDM-VTON"
 source scripts/alaya/env.sh
 ```
 
-### 2.4 Download the checkpoints
+### 2.4 Check the shared library first
+
+Alaya mounts a read-only model library at `/root/public` (a CephFS share,
+hundreds of TB). If IDM-VTON is already there, you skip the largest download
+entirely — which matters a lot when no PVC is attached:
+
+```bash
+python scripts/alaya/find_local_models.py            # scans /root/public
+python scripts/alaya/find_local_models.py /root/public --max-depth 7
+```
+
+It identifies an IDM-VTON checkout structurally rather than by name: stock SDXL
+has `unet/` but no `unet_encoder/`, so a directory holding both is IDM-VTON
+whatever it is called. Scanning is depth- and time-bounded, since the mount is
+far too large to walk exhaustively.
+
+If it finds one:
+
+```bash
+export IDM_MODEL_PATH=/root/public/<whatever it printed>
+python scripts/alaya/demo_single.py                  # no download
+```
+
+The four preprocessing checkpoints are small, so download them normally:
+
+```bash
+python scripts/alaya/01_download_checkpoints.py --skip-model
+```
+
+### 2.5 Download whatever is still missing
 
 The `ckpt/*` files in git are **placeholders** — literally files containing
 `put ip adapter ckpt here`. Nothing runs until you replace them.
@@ -288,36 +377,7 @@ huggingface.co is not routable from the cluster):
 
 The download is resumable — if it drops, just run it again.
 
-### 2.4.1 Check the shared library first
-
-Alaya mounts a read-only model library at `/root/public` (a CephFS share,
-hundreds of TB). If IDM-VTON is already there, you skip the largest download
-entirely — which matters a lot when no PVC is attached:
-
-```bash
-python scripts/alaya/find_local_models.py            # scans /root/public
-python scripts/alaya/find_local_models.py /root/public --max-depth 7
-```
-
-It identifies an IDM-VTON checkout structurally rather than by name: stock SDXL
-has `unet/` but no `unet_encoder/`, so a directory holding both is IDM-VTON
-whatever it is called. Scanning is depth- and time-bounded, since the mount is
-far too large to walk exhaustively.
-
-If it finds one:
-
-```bash
-export IDM_MODEL_PATH=/root/public/<whatever it printed>
-python scripts/alaya/demo_single.py                  # no download
-```
-
-The four preprocessing checkpoints are small, so download them normally:
-
-```bash
-python scripts/alaya/01_download_checkpoints.py --skip-model
-```
-
-### 2.5 Verify before you burn GPU time
+### 2.6 Verify before you burn GPU time
 
 ```bash
 python scripts/alaya/preflight.py
@@ -328,7 +388,7 @@ version pins, and whether each `ckpt/*` file is real or still a placeholder. If
 something is wrong, paste the whole output when asking for help — it is meant to
 be the only thing needed to diagnose a Workshop.
 
-### 2.6 Run one image, headlessly
+### 2.7 Run one image, headlessly
 
 Do this **before** the gradio demo. It runs the identical pipeline from the
 terminal on the examples already bundled in the repo, so a broken environment
@@ -363,7 +423,7 @@ generate time and peak GPU memory.
 To look at the PNG: it is on the PVC, so the VS Code Explorer in the Workshop
 window opens it directly — click the file.
 
-### 2.7 Run the gradio demo
+### 2.8 Run the gradio demo
 
 ```bash
 bash scripts/alaya/02_run_gradio.sh
@@ -373,7 +433,7 @@ It binds `0.0.0.0:7860`. VS Code's **PORTS** panel forwards it to your laptop
 automatically; if it doesn't, *Forward a Port* → `7860` and open the localhost
 link.
 
-### 2.8 Batch inference on VITON-HD
+### 2.9 Batch inference on VITON-HD
 
 ```bash
 export IDM_DATA_DIR=$IDM_ROOT/data/zalando   # per the README layout
