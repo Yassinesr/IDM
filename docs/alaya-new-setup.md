@@ -145,6 +145,34 @@ shared cluster see §3.3. GPU count 1 is enough for inference — training
 
 VS Code opens a new window attached to the Workshop.
 
+### 2.1.2 Verify storage before anything else
+
+The moment a new Workshop opens, before cloning or building:
+
+```bash
+bash scripts/alaya/check_storage.sh
+```
+
+It lists every mount, marks which are ephemeral, and says whether anything here
+survives a release. Two distinctions it makes that matter:
+
+- **Read-only** mounts (`/root/public`) are a model library, not workspace.
+- **Writable but local** is the trap. A PVC normally appears as `nfs`/`cephfs`.
+  A large writable *local* mount is usually the node's scratch: Alaya's
+  `/anc-init` is 867 GB of exactly that. It does not follow the pod when it is
+  rescheduled, and on a shared cluster you are filling a disk your neighbours
+  are using. The script flags these separately rather than recommending them.
+
+It exits non-zero when nothing persistent is attached, so it also works as a
+guard at the top of a longer script.
+
+The only real proof is a round trip. Before a long download, drop a marker and
+look for it next session:
+
+```bash
+echo "written $(date -Is)" > /pvc/.idm-persistence-check
+```
+
 ### 2.2 Set up the environment
 
 In the Workshop terminal:
@@ -493,6 +521,8 @@ These are real and will cost you time otherwise:
 
 | File | Purpose |
 |---|---|
+| `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
+| `scripts/alaya/bundle_for_workshop.sh` | ship the repo over SSH when GitHub is slow |
 | `scripts/alaya/env.sh` | per-session env: PVC paths, caches, HF mirror |
 | `scripts/alaya/_activate.sh` | activates either the venv or the conda fallback |
 | `scripts/alaya/00_bootstrap_workshop.sh` | build the venv on the PVC (Path A) |
