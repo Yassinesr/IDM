@@ -145,6 +145,32 @@ shared cluster see §3.3. GPU count 1 is enough for inference — training
 
 VS Code opens a new window attached to the Workshop.
 
+### 2.1.1a Can I add storage without recreating the Workshop?
+
+Sometimes. Check rather than assume:
+
+```bash
+bash scripts/alaya/check_mount_capability.sh
+```
+
+Being root in a container is not enough to mount anything — `mount()` needs
+`CAP_SYS_ADMIN`, which Kubernetes drops for unprivileged pods, and FUSE needs
+`/dev/fuse`. The script reports both, then settles it by actually mounting a
+tmpfs.
+
+Two things worth knowing before assuming a rebuild is required:
+
+- **Stopping is not releasing.** The login banner says
+  *系统盘为临时工作空间，变更内容在容器实例释放后消失，在关机时自动保存镜像* —
+  the container disk is lost when the instance is **released** (释放), but an
+  image is auto-saved on **shutdown** (关机). So a graceful stop/start keeps
+  your work. Do not rely on it for tens of GB of weights, but it does mean a
+  Workshop can often be stopped, edited to add a mount, and started again
+  rather than rebuilt.
+- **A hand-made mount is not a PVC.** Even where `mount -t nfs` works, it does
+  not survive a restart, and it sidesteps the platform's quota accounting.
+  Fine as a stopgap; not the durable answer.
+
 ### 2.1.2 Verify storage before anything else
 
 The moment a new Workshop opens, before cloning or building:
@@ -522,6 +548,7 @@ These are real and will cost you time otherwise:
 | File | Purpose |
 |---|---|
 | `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
+| `scripts/alaya/check_mount_capability.sh` | can this container mount storage itself? |
 | `scripts/alaya/bundle_for_workshop.sh` | ship the repo over SSH when GitHub is slow |
 | `scripts/alaya/env.sh` | per-session env: PVC paths, caches, HF mirror |
 | `scripts/alaya/_activate.sh` | activates either the venv or the conda fallback |
