@@ -586,8 +586,12 @@ These are real and will cost you time otherwise:
   `from huggingface_hub import cached_download`, removed in 0.26.0, and that
   import is on the `DiffusionPipeline` path — so it fails at import, not at
   download. `requirements.txt` pins `0.25.2`.
-- **`numpy` must stay on 1.x.** torch 2.0.1 is not built against the NumPy 2
-  ABI. Pinned to `1.26.4`.
+- **`numpy` must stay on 1.x.** torch, scipy and onnxruntime here are all built
+  against the NumPy 1.x ABI and fail outright on 2.x. Pinned to `1.26.4` — but
+  the pin only binds when `requirements.txt` is what you install. A bare
+  `pip install <anything>` can quietly pull numpy forward and break the
+  environment, so install alongside the pin:
+  `pip install "numpy==1.26.4" <package>`.
 - **torch 2.0.1 is a preference, not a requirement.** `environment.yaml` names
   it, but the only dependency that constrained torch was `basicsr`, which
   imports `torchvision.transforms.functional_tensor` (removed in torchvision
@@ -629,6 +633,7 @@ These are real and will cost you time otherwise:
 | Weights re-download after a Workshop restart | `HF_HOME` not on the PVC | `source scripts/alaya/env.sh` before anything |
 | `FileNotFoundError` on a `ckpt/...` path | still the placeholder | `python scripts/alaya/01_download_checkpoints.py` |
 | `RuntimeError: Numpy is not available` | NumPy 2 got pulled in | `pip install "numpy==1.26.4"` |
+| `_ARRAY_API not found` / `numpy.core.multiarray failed to import` | same: NumPy 2 broke modules built against the 1.x ABI | `pip install "numpy==1.26.4"` — and pin it in the *same* command whenever installing anything else |
 | `ImportError: libGL.so.1: cannot open shared object file` | `opencv-python` wants a GUI backend the server image lacks | `pip uninstall -y opencv-python && pip install opencv-python-headless` (now the default in `requirements.txt`) |
 | preflight fails on free space although the model is downloaded | older preflight demanded 60 GB unconditionally | update your checkout; it now needs 5 GB once the weights are cached |
 | `torch.cuda.is_available()` is False | Workshop has no GPU attached | check the GPU count in the Workshop settings |

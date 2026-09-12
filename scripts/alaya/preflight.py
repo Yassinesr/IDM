@@ -179,8 +179,25 @@ def main():
         except ImportError:
             fail(f"{mod} not installed", "pip install -r requirements.txt")
             continue
+        except Exception as exc:
+            # A module compiled against NumPy 1.x raises SystemError, not
+            # ImportError, under NumPy 2 - report it rather than printing a
+            # traceback and then declaring the module fine.
+            fail(f"{mod} is installed but fails to import: "
+                 f"{type(exc).__name__}: {str(exc)[:120]}",
+                 "pip install -r requirements.txt")
+            continue
         got = getattr(m, "__version__", "?")
-        (ok if got.startswith(want) else warn)(f"{mod} {got} (expected {want}*)")
+        if got.startswith(want):
+            ok(f"{mod} {got} (expected {want}*)")
+        elif mod == "numpy":
+            # Not a nit: torch, scipy and onnxruntime here are all built against
+            # the NumPy 1.x ABI and fail outright on 2.x. Easy to reintroduce,
+            # since installing almost anything can pull numpy forward.
+            fail(f"numpy {got} - this stack is built against the 1.x ABI",
+                 'pip install "numpy==1.26.4"')
+        else:
+            warn(f"{mod} {got} (expected {want}*)")
 
     # The pin that actually bites: diffusers 0.25 imports a symbol hub 0.26 dropped.
     try:
