@@ -39,8 +39,11 @@ fi
 # platform is explicit about this - 系统盘为临时工作空间，变更内容在容器实例
 # 释放后消失. Compare device numbers: same device as / means no PVC.
 if [ "$(stat -c %d "$IDM_ROOT" 2>/dev/null)" = "$(stat -c %d / 2>/dev/null)" ]; then
+    _free_gb="$(df -BG --output=avail "$IDM_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')"
     echo "ERROR: $IDM_ROOT is on the container's root filesystem, not a PVC." >&2
-    echo "       That disk is ephemeral and far too small for the weights." >&2
+    echo "       It has ${_free_gb:-?} GB free and is ephemeral: released with the" >&2
+    echo "       container. A graceful shutdown (关机) saves an image and keeps it;" >&2
+    echo "       a release (释放) does not." >&2
     echo "" >&2
     echo "       Filesystems actually mounted here:" >&2
     df -h | grep -v "^tmpfs" | sed 's/^/         /' >&2

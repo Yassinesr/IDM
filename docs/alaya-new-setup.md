@@ -34,6 +34,12 @@ Look for a mount that is **not** `/` and **not** `/root/public`. Typically
 | a large writable mount, e.g. `/pvc` | storage attached | step 2 |
 | only `/` and `/root/public` | **no storage** — anything you build is lost on release | §2.1.1 |
 
+Do not be tempted by `/anc-init`. It is large (867 GB) and writable, but it is
+the node's own disk, not yours: it does not follow the pod when rescheduled,
+and on a shared cluster you are filling space your neighbours depend on.
+`/etc/hostname` showing a 3.4 TB filesystem is a bind-mounted *file*, not
+storage you can use.
+
 ```bash
 # 2. Get the repo. From China, prefer the bundle (§2.2) - this clone is slow.
 export IDM_ROOT=/pvc/idm          # <- your real mount + /idm
