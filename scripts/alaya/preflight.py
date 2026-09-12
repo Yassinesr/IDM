@@ -56,7 +56,11 @@ def main():
     if pyver == "3.10":
         ok(f"python {pyver}")
     else:
-        fail(f"python {pyver} - torch 2.0.1 has no wheel for it",
+        # torch is no longer the binding constraint (the bootstrap falls back to
+        # a newer version when needed); onnxruntime 1.16.2 publishes no cp311/
+        # cp312 wheel, and transformers 4.36.2 predates 3.12 support.
+        fail(f"python {pyver} - this stack targets 3.10 "
+             "(onnxruntime 1.16.2 and transformers 4.36.2)",
              "recreate the env: rm -rf $IDM_VENV && "
              "bash scripts/alaya/00_bootstrap_workshop.sh")
 
@@ -96,22 +100,27 @@ def main():
 
     # --------------------------------------------------------------- gpu ---
     section("gpu / torch")
+    # Never bail out early here: on a shared Workshop the sharing checks below
+    # are exactly what you want to see even before the env is built.
     try:
         import torch
     except ImportError:
+        torch = None
         fail("torch not installed", "bash scripts/alaya/00_bootstrap_workshop.sh")
-        return summarize()
 
-    ok(f"torch {torch.__version__}")
-    if not torch.cuda.is_available():
-        fail("torch.cuda.is_available() is False - no GPU attached to this Workshop",
-             "check the GPU count in the Workshop settings, then recreate it")
-    else:
-        for i in range(torch.cuda.device_count()):
-            p = torch.cuda.get_device_properties(i)
-            ok(f"gpu {i}: {p.name}  {p.total_memory / 2**30:.1f} GiB  sm_{p.major}{p.minor}")
-            if p.total_memory / 2**30 < 20:
-                warn(f"gpu {i} has < 20 GiB - use --steps 20 and expect OOM at 768x1024")
+    if torch is not None:
+        ok(f"torch {torch.__version__}")
+        if not torch.cuda.is_available():
+            fail("torch.cuda.is_available() is False - no GPU attached to this Workshop",
+                 "check the GPU count in the Workshop settings, then recreate it")
+        else:
+            for i in range(torch.cuda.device_count()):
+                p = torch.cuda.get_device_properties(i)
+                ok(f"gpu {i}: {p.name}  {p.total_memory / 2**30:.1f} GiB  sm_{p.major}{p.minor}")
+                if p.major < 8 and torch.__version__.startswith("2."):
+                    warn(f"gpu {i} is sm_{p.major}{p.minor}; make sure the wheel has kernels for it")
+                if p.total_memory / 2**30 < 20:
+                    warn(f"gpu {i} has < 20 GiB - use --steps 20 and expect OOM at 768x1024")
 
     # -------------------------------------------------------------- deps ---
     section("dependencies")
@@ -162,6 +171,50 @@ def main():
             ok(f"yisol/IDM-VTON cached ({size / 2**30:.1f} GiB)")
         else:
             warn("yisol/IDM-VTON not in the cache yet - the first run downloads it")
+
+    # ---------------------------------------------------- sharing / GPU ----
+    section("shared use")
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,used_gpu_memory",
+             "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=15)
+        apps = [l for l in out.stdout.strip().splitlines() if l.strip()]
+        if not apps:
+            ok("no other processes are using the GPU")
+        else:
+            mine = str(os.getpid())
+            for line in apps:
+                pid = line.split(",")[0].strip()
+                label = "this process" if pid == mine else "SOMEONE ELSE"
+                warn(f"GPU in use by pid {pid} ({label}): {line}")
+            warn("starting a run now competes for VRAM - check before you launch")
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        warn(f"could not query GPU processes ({exc})")
+
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,memory.used,memory.total",
+             "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=15)
+        for line in out.stdout.strip().splitlines():
+            ok(f"gpu memory {line}")
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+
+    if os.environ.get("IDM_USER"):
+        ok(f"IDM_USER={os.environ['IDM_USER']} - your paths are scoped to you")
+    elif Path("/pvc/users").is_dir():
+        warn("/pvc/users exists (shared PVC) but IDM_USER is unset - "
+             "you are writing into the common root")
+    else:
+        ok("IDM_USER unset (fine if this PVC is yours alone)")
+
+    # A pip.conf in the shared home changes pip's index for every user of it.
+    for cfg in (Path.home() / ".config/pip/pip.conf", Path.home() / ".pip/pip.conf"):
+        if cfg.exists():
+            warn(f"{cfg} exists and affects everyone sharing this home directory")
 
     # ------------------------------------------------------------ config ---
     section("repo files")

@@ -58,6 +58,40 @@ session** — a fresh Workshop is a fresh container.
 
 ---
 
+## 1.1 If the cluster, PVC or Workshop is shared
+
+Two different things get called "shared", and they carry different risks:
+
+**A shared-type (共享型) cluster, your own Workshop.** Your container is yours —
+processes, ports and `$HOME` are private. What you share is the *PVC* and the
+*GPU quota*. So:
+
+- Set `IDM_USER` before sourcing `env.sh`, which moves your tree to
+  `/pvc/users/$IDM_USER/idm`. Without it everyone lands on `/pvc/idm` and the
+  first `rm -rf $IDM_VENV` takes out someone else's environment too.
+- Consider one shared weights cache: `export IDM_SHARED_HF=/pvc/shared/hf`. The
+  model is tens of GB and byte-identical for everyone, and the hub client locks
+  per file, so concurrent readers are safe.
+- Use your own **Namespace** in the Workshop dialog (§3.3).
+
+**One Workshop that several people log into.** Now you also share the container:
+one process table, one set of ports, one `$HOME`, one GPU.
+
+- Never `pip config set` anything — it writes `~/.config/pip/pip.conf` and
+  changes pip's index for everyone. Use `PIP_INDEX_URL=...` per command instead.
+  (`00_bootstrap_workshop.sh` does exactly this.)
+- Check the GPU before launching: `nvidia-smi`. A 768×1024 run wants ~24 GB, so
+  two people at once on a 80 GB card is fine and three is not. `preflight.py`
+  reports who else is on the card.
+- Pin yourself to one GPU if there are several: `export CUDA_VISIBLE_DEVICES=1`.
+- Pick your own gradio port — `GRADIO_SERVER_PORT=7861` — or you will collide,
+  and never `kill` a python process you did not start.
+- Write outputs to your own path: `--output "$IDM_ROOT/out/demo.png"`.
+
+`python scripts/alaya/preflight.py` reports all of this: other processes on the
+GPU, per-GPU memory, whether `IDM_USER` is set, and whether a shared `pip.conf`
+exists.
+
 ## 2. Path A — official image + venv (recommended)
 
 ### 2.1 Create the Workshop

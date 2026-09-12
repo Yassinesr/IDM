@@ -101,7 +101,10 @@ if [ "$ACTUAL_PY" != "3.10" ]; then
 fi
 
 export PIP_CACHE_DIR="$IDM_ROOT/pipcache"
-[ -n "$PIP_INDEX_URL" ] && pip config set global.index-url "$PIP_INDEX_URL" >/dev/null
+# Deliberately an env var, NOT `pip config set`: that writes to the user-level
+# ~/.config/pip/pip.conf, which on a shared Workshop changes pip's index for
+# everyone else using that home directory. This stays scoped to this process.
+[ -n "$PIP_INDEX_URL" ] && export PIP_INDEX_URL
 pip install --upgrade pip setuptools wheel
 
 # ----------------------------------------------------------------- torch ----
