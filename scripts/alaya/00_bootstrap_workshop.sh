@@ -81,7 +81,10 @@ if [ "$(stat -c %d "$IDM_ROOT" 2>/dev/null)" = "$(stat -c %d / 2>/dev/null)" ]; 
     echo "       Fix: recreate the Workshop with Storage > Container Path set" >&2
     echo "       (see docs/alaya-new-setup.md section 2.1.1), then point" >&2
     echo "       IDM_ROOT at that mount." >&2
-    echo "       To proceed anyway: IDM_ALLOW_EPHEMERAL=1 bash \$0" >&2
+    # Print the real path, not $0: pasted into an interactive shell, $0 expands
+    # to the shell itself and gives "cannot execute binary file".
+    echo "       To accept the loss and continue anyway:" >&2
+    echo "         IDM_ALLOW_EPHEMERAL=1 bash ${BASH_SOURCE[0]}" >&2
     [ "${IDM_ALLOW_EPHEMERAL:-0}" = "1" ] || exit 1
     echo "WARNING: IDM_ALLOW_EPHEMERAL=1 - continuing on ephemeral disk." >&2
 fi
