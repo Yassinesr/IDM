@@ -26,6 +26,17 @@ torchmetrics==1.2.1
 tqdm==4.66.1
 einops==0.7.0
 scipy==1.11.1
+# Missing from environment.yaml, but imported unconditionally:
+#   scikit-image  preprocess/openpose/annotator/openpose/hand.py, which
+#                 __init__.py imports at load time even though IDM-VTON never
+#                 enables hand detection.
+#   matplotlib    the same openpose modules, and gradio_demo/densepose/vis/,
+#                 which apply_net.py imports at module level.
+# Both declare only numpy>=1.2x with no upper bound, so install them through
+# this file - a standalone `pip install` would take numpy to 2.x and break the
+# ABI for torch, scipy and onnxruntime.
+scikit-image==0.22.0
+matplotlib==3.8.4
 # -headless: identical cv2 API without the GUI backend, so it does not need
 # libGL.so.1 - which server images like Alaya's do not ship. The only
 # imshow/waitKey calls in this repo are in the openpose hand-detection path,

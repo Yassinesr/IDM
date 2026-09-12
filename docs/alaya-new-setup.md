@@ -605,6 +605,12 @@ These are real and will cost you time otherwise:
   lazily in `train_xl.py` under `--use_8bit_adam` only, so it lives in
   `requirements-train.txt`.
 - **`ckpt/*` in git are placeholders**, not weights (§2.4).
+- **`environment.yaml` is missing two runtime dependencies.** `scikit-image` and
+  `matplotlib` are imported unconditionally — the first by
+  `preprocess/openpose/annotator/openpose/hand.py`, which `__init__.py` loads
+  even though hand detection is never enabled, and the second by those same
+  openpose modules and by `gradio_demo/densepose/vis/`, which `apply_net.py`
+  imports at module level. `requirements.txt` adds both.
 - **Python must be 3.10.** `torch==2.0.1` has no cp311/cp312 wheel, so a 3.12
   base image cannot run this stack directly. `00_bootstrap_workshop.sh`
   provisions 3.10 via Miniconda on the PVC when it finds anything else, and
