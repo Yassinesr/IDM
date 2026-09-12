@@ -58,6 +58,10 @@ def parse_args():
                          "not for VITON-HD-style images that are already 3:4")
     ap.add_argument("--save-mask", action="store_true",
                     help="also write <output>.mask.png to debug a bad mask")
+    ap.add_argument("--model", default=os.environ.get("IDM_MODEL_PATH", "yisol/IDM-VTON"),
+                    help="Hub id, or a local directory holding unet/, unet_encoder/, "
+                         "vae/ etc. Defaults to $IDM_MODEL_PATH, else the Hub id. "
+                         "Use scripts/alaya/find_local_models.py to locate one.")
     ap.add_argument("--list", action="store_true", help="list bundled examples and exit")
     args = ap.parse_args()
     # Resolve user paths against the caller's cwd, not the repo root we chdir'd to.
@@ -105,6 +109,28 @@ def main():
             print(f"ERROR: {p} does not exist", file=sys.stderr)
             return 1
 
+    # Validate the model path before importing torch: loading torch takes long
+    # enough that finding out afterwards is needlessly annoying.
+    base_path = args.model
+    if os.path.isdir(base_path):
+        # A local checkout: no network, and it works on a read-only mount.
+        missing = [d for d in ("unet", "unet_encoder", "vae", "text_encoder",
+                               "text_encoder_2", "image_encoder", "tokenizer",
+                               "tokenizer_2", "scheduler")
+                   if not os.path.isdir(os.path.join(base_path, d))]
+        if missing:
+            print(f"ERROR: {base_path} is not a complete IDM-VTON checkout.",
+                  file=sys.stderr)
+            print(f"       missing subfolders: {', '.join(missing)}", file=sys.stderr)
+            return 1
+        print(f"model    {base_path} (local, no download)")
+    elif "/" in base_path and not base_path.startswith("."):
+        print(f"model    {base_path} (Hub)")
+    else:
+        print(f"ERROR: {base_path} is neither a directory nor a Hub id.",
+              file=sys.stderr)
+        return 1
+
     import torch
     if not torch.cuda.is_available():
         print("ERROR: no CUDA device. The models load in float16 and the "
@@ -131,11 +157,13 @@ def main():
     import apply_net
     from utils_mask import get_mask_location
 
-    base_path = "yisol/IDM-VTON"
     print(f"human    {_rel(human_path)}")
     print(f"garment  {_rel(garment_path)}")
     print(f"desc     {args.desc!r}")
-    print(f"loading {base_path} (first run downloads tens of GB into $HF_HOME)")
+    if not os.path.isdir(base_path):
+        print("loading (first run downloads tens of GB into $HF_HOME)")
+    else:
+        print("loading")
     t0 = time.time()
 
     unet = UNet2DConditionModel.from_pretrained(base_path, subfolder="unet",

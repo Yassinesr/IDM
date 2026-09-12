@@ -234,6 +234,35 @@ huggingface.co is not routable from the cluster):
 
 The download is resumable — if it drops, just run it again.
 
+### 2.4.1 Check the shared library first
+
+Alaya mounts a read-only model library at `/root/public` (a CephFS share,
+hundreds of TB). If IDM-VTON is already there, you skip the largest download
+entirely — which matters a lot when no PVC is attached:
+
+```bash
+python scripts/alaya/find_local_models.py            # scans /root/public
+python scripts/alaya/find_local_models.py /root/public --max-depth 7
+```
+
+It identifies an IDM-VTON checkout structurally rather than by name: stock SDXL
+has `unet/` but no `unet_encoder/`, so a directory holding both is IDM-VTON
+whatever it is called. Scanning is depth- and time-bounded, since the mount is
+far too large to walk exhaustively.
+
+If it finds one:
+
+```bash
+export IDM_MODEL_PATH=/root/public/<whatever it printed>
+python scripts/alaya/demo_single.py                  # no download
+```
+
+The four preprocessing checkpoints are small, so download them normally:
+
+```bash
+python scripts/alaya/01_download_checkpoints.py --skip-model
+```
+
 ### 2.5 Verify before you burn GPU time
 
 ```bash
@@ -470,6 +499,7 @@ These are real and will cost you time otherwise:
 | `scripts/alaya/01_download_checkpoints.py` | fetch all weights, mirror-aware |
 | `scripts/alaya/preflight.py` | PASS/FAIL environment check; paste its output when stuck |
 | `scripts/alaya/demo_single.py` | headless one-image try-on, no browser needed |
+| `scripts/alaya/find_local_models.py` | finds usable weights in `/root/public` before you download |
 | `scripts/alaya/02_run_gradio.sh` | launch the demo with port forwarding |
 | `scripts/alaya/03_run_inference.sh` | VITON-HD inference with PVC paths |
 | `scripts/alaya/k8s_bootstrap.sh` | namespace + pull secret + SA patch (Path B) |
