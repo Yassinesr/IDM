@@ -186,8 +186,11 @@ tv_for() {
 # Preference order. 2.0.1 is what environment.yaml specifies, but nothing in
 # this project actually requires it: the only dependency that needed
 # torchvision < 0.17 was basicsr, which is never imported (see requirements.txt).
-# The fallbacks exist because some mirrors do not carry 2.0.1 at all -
-# mirror.sjtu.edu.cn/pytorch-wheels/cu118 starts at 2.2.0.
+#
+# In practice the fallback is now the normal path, not an edge case: as of 2026
+# neither download.pytorch.org/whl/cu118 nor mirror.sjtu.edu.cn carries 2.0.1
+# any more - both start at 2.2.0 - so this usually settles on 2.2.2. 2.0.1 stays
+# first so that an index which does still have it is preferred.
 # Keep every candidate on cu118 or newer: an H800 is sm_90, which cu117 builds
 # have no kernels for.
 TORCH_CANDIDATES="${TORCH_VERSION:-2.0.1 2.2.2 2.4.1 2.5.1}"

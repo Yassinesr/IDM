@@ -300,8 +300,10 @@ TORCH_VERSION=2.4.1 bash scripts/alaya/00_bootstrap_workshop.sh
 The script asks the index which torch versions it has and takes the first of
 `2.0.1 2.2.2 2.4.1 2.5.1` that is present, mapping torchvision to match. It
 prefers 2.0.1 because that is what `environment.yaml` names, but nothing here
-actually requires it (§4), and some mirrors don't carry it —
-`mirror.sjtu.edu.cn` starts at 2.2.0. Every candidate is cu118 or newer, because
+actually requires it (§4) — and as of 2026 neither the official cu118 index nor
+`mirror.sjtu.edu.cn` still carries it. Both start at 2.2.0, so in practice this
+settles on **torch 2.2.2 + torchvision 0.17.2**. Seeing
+`2.0.1 is not on this index` is expected, not a problem. Every candidate is cu118 or newer, because
 an H800 is sm_90 and cu117 builds have no kernels for it.
 
 For training, add the extra dependency afterwards:
