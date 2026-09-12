@@ -312,6 +312,39 @@ For training, add the extra dependency afterwards:
 pip install -r requirements-train.txt
 ```
 
+### 2.2.1 Getting the repo across when GitHub is slow
+
+Cloning from inside China can be unusable. Ship it from a machine that already
+has the repo instead:
+
+```powershell
+# Windows
+cd C:\Users\hp\Desktop\IDM
+.\scripts\alaya\sync_from_windows.ps1 -SshHost idm-1.bj5
+```
+
+```bash
+# macOS / Linux
+bash scripts/alaya/bundle_for_workshop.sh idm-1.bj5
+```
+
+**Send a git bundle, not a zip.** A zip of the working tree arrives without
+usable history, so the copy on the Workshop cannot `git pull` and you re-zip for
+every subsequent change — and it is easy to end up debugging a stale checkout
+without realising it. A bundle is smaller (packed history, ~25 MB against a
+78 MB tree) and leaves a real repo pointing at GitHub, so only this first hop is
+special.
+
+If you already sent a zip, check what you have:
+
+```bash
+ls -d .git                                          # history survived?
+grep -c dry-run scripts/alaya/01_download_checkpoints.py   # 0 means stale
+```
+
+`Compress-Archive -Path IDM` normally does include `.git`, but
+`Compress-Archive -Path IDM\*` does not — the wildcard skips hidden entries.
+
 ### 2.3 Every session after that
 
 A new Workshop terminal starts with none of this set, so:
@@ -617,7 +650,8 @@ These are real and will cost you time otherwise:
 |---|---|
 | `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
 | `scripts/alaya/check_mount_capability.sh` | can this container mount storage itself? |
-| `scripts/alaya/bundle_for_workshop.sh` | ship the repo over SSH when GitHub is slow |
+| `scripts/alaya/bundle_for_workshop.sh` | ship the repo over SSH when GitHub is slow (macOS/Linux) |
+| `scripts/alaya/sync_from_windows.ps1` | same, from PowerShell |
 | `scripts/alaya/env.sh` | per-session env: PVC paths, caches, HF mirror |
 | `scripts/alaya/_activate.sh` | activates either the venv or the conda fallback |
 | `scripts/alaya/00_bootstrap_workshop.sh` | build the venv on the PVC (Path A) |
