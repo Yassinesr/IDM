@@ -633,6 +633,8 @@ These are real and will cost you time otherwise:
 | `No matching distribution found for torch==2.0.1`, and the listed versions all start at 2.2 | the mirror does not carry 2.0.1 | nothing to do — current bootstrap falls back automatically; or `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu118` |
 | `No matching distribution found for torch==2.0.1`, and no versions are listed | env is on python 3.11/3.12 | `rm -rf $IDM_VENV && bash scripts/alaya/00_bootstrap_workshop.sh` |
 | `venv already exists` but it is the wrong python | stale env from an earlier attempt | `rm -rf $IDM_VENV` and re-run the bootstrap |
+| `CondaToSNonInteractiveError` | Anaconda's default channels now demand ToS acceptance | nothing to do — the bootstrap uses `conda-forge` with `--override-channels`; update your checkout |
+| `No such file or directory` for a python that is on PATH | the venv was deleted mid-session, PATH and bash's hash still point into it | `source scripts/alaya/env.sh` cleans it, or start a new shell |
 | `no kernel image is available for execution on the device` | cu117 torch on an sm_90 GPU | reinstall from a cu118+ index |
 | `No space left on device` mid-download | Container Path was left blank, so there is no PVC | recreate the Workshop with Storage set (§2.1.1) |
 | Storage volume dropdown is empty ("no data to select") | no NAS volume exists yet | create one in 产品中心 → 存储管理 (§2.1.1) |

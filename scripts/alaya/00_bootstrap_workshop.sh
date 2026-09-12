@@ -140,7 +140,20 @@ if [ -f "$IDM_VENV/bin/activate" ] || [ -d "$IDM_VENV/conda-meta" ]; then
     echo "==> environment already exists at $IDM_VENV"
 elif [ "$USE_CONDA" = "1" ]; then
     echo "==> creating conda env (python 3.10) at $IDM_VENV"
-    "$IDM_ROOT/miniconda/bin/conda" create -p "$IDM_VENV" python=3.10 -y
+    # --override-channels -c conda-forge, deliberately, rather than conda's
+    # defaults. Two reasons: repo.anaconda.com now refuses non-interactive use
+    # until its Terms of Service are accepted (CondaToSNonInteractiveError), and
+    # those same defaults require a paid licence for larger organisations.
+    # conda-forge has neither constraint and carries python 3.10 fine.
+    _conda="$IDM_ROOT/miniconda/bin/conda"
+    _tuna_forge="https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"
+    if ! "$_conda" create -p "$IDM_VENV" python=3.10 -y \
+            --override-channels -c "${CONDA_CHANNEL:-conda-forge}"; then
+        echo "    conda-forge failed; retrying via the Tsinghua mirror" >&2
+        rm -rf "$IDM_VENV"
+        "$_conda" create -p "$IDM_VENV" python=3.10 -y \
+            --override-channels -c "$_tuna_forge"
+    fi
 else
     echo "==> creating venv at $IDM_VENV"
     "$PY_BIN" -m venv "$IDM_VENV"
