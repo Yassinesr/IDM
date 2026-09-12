@@ -629,6 +629,8 @@ These are real and will cost you time otherwise:
 | Weights re-download after a Workshop restart | `HF_HOME` not on the PVC | `source scripts/alaya/env.sh` before anything |
 | `FileNotFoundError` on a `ckpt/...` path | still the placeholder | `python scripts/alaya/01_download_checkpoints.py` |
 | `RuntimeError: Numpy is not available` | NumPy 2 got pulled in | `pip install "numpy==1.26.4"` |
+| `ImportError: libGL.so.1: cannot open shared object file` | `opencv-python` wants a GUI backend the server image lacks | `pip uninstall -y opencv-python && pip install opencv-python-headless` (now the default in `requirements.txt`) |
+| preflight fails on free space although the model is downloaded | older preflight demanded 60 GB unconditionally | update your checkout; it now needs 5 GB once the weights are cached |
 | `torch.cuda.is_available()` is False | Workshop has no GPU attached | check the GPU count in the Workshop settings |
 | `No matching distribution found for torch==2.0.1`, and the listed versions all start at 2.2 | the mirror does not carry 2.0.1 | nothing to do — current bootstrap falls back automatically; or `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu118` |
 | `No matching distribution found for torch==2.0.1`, and no versions are listed | env is on python 3.11/3.12 | `rm -rf $IDM_VENV && bash scripts/alaya/00_bootstrap_workshop.sh` |

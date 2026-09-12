@@ -110,6 +110,21 @@ def main():
         ok(f"{public} exists (read-only shared models/datasets) - "
            "check it before downloading")
 
+    # How much free space is actually needed depends on whether the weights are
+    # already here. Demanding room for a download that has already happened is
+    # how a working setup gets reported as broken.
+    model_cached = 0
+    if hf_home:
+        folder = Path(hf_home) / "hub" / "models--yisol--IDM-VTON"
+        if folder.is_dir():
+            for f in folder.rglob("*"):
+                try:
+                    if f.is_file() and not f.is_symlink():
+                        model_cached += f.stat().st_size
+                except OSError:
+                    pass
+    need_gb = 5 if model_cached > 10 * 2**30 else 60
+
     for label, path in [("IDM_ROOT", idm_root), ("/tmp", "/tmp")]:
         if not path:
             continue
@@ -118,9 +133,14 @@ def main():
         except OSError as exc:
             warn(f"{label}: cannot stat ({exc})")
             continue
-        if label == "IDM_ROOT" and free < 60:
-            fail(f"{label} ({path}): {free:.0f} GiB free - the model alone is tens of GB",
-                 "grow the PVC or clear $HF_HOME")
+        if label == "IDM_ROOT" and free < need_gb:
+            why = ("outputs and temporary files need room" if need_gb == 5
+                   else "the model still has to be downloaded")
+            fail(f"{label} ({path}): {free:.0f} GiB free, want {need_gb} - {why}",
+                 "clear space, or grow the PVC")
+        elif label == "IDM_ROOT" and model_cached:
+            ok(f"{label} ({path}): {free:.0f} GiB free "
+               f"({model_cached / 2**30:.0f} GiB of it already the cached model)")
         else:
             ok(f"{label} ({path}): {free:.0f} GiB free")
 
