@@ -26,10 +26,40 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 echo "==> repo:     $REPO_DIR"
 echo "==> IDM_ROOT: $IDM_ROOT"
 
+case "$IDM_ROOT" in
+    /*) ;;
+    *)  echo "ERROR: IDM_ROOT must be an absolute path, got '$IDM_ROOT'." >&2
+        echo "       A relative value is resolved against your current directory," >&2
+        echo "       which is how 'pvc/idm' becomes '$PWD/pvc/idm'." >&2
+        exit 1 ;;
+esac
+
 if ! mountpoint -q "$IDM_ROOT" 2>/dev/null && [ ! -d "$IDM_ROOT" ]; then
     echo "ERROR: $IDM_ROOT does not exist." >&2
-    echo "       Set IDM_ROOT to the PVC mount path you chose in Aladdin's" >&2
-    echo "       'PVC MOUNTS' field. Run 'df -h' to list the mounts." >&2
+    echo "" >&2
+    # Naming a wrong path is far more common than having no storage, so show
+    # what is actually here rather than only saying to go and look.
+    _root_dev="$(stat -c %d / 2>/dev/null)"
+    _found=0
+    while read -r _src _mnt _fstype _opts _; do
+        [ -d "$_mnt" ] || continue
+        [ "$_mnt" = "/" ] && continue
+        case "$_fstype" in tmpfs|devtmpfs|proc|sysfs|cgroup*|devpts|squashfs|overlay) continue ;; esac
+        case ",$_opts," in *,ro,*) continue ;; esac
+        [ "$(stat -c %d "$_mnt" 2>/dev/null)" = "$_root_dev" ] && continue
+        [ "$_found" = "0" ] && echo "       Writable non-root mounts that look like candidates:" >&2
+        _found=1
+        printf '         %-20s (%s, %s free)\n' "$_mnt" "$_fstype" \
+            "$(df -h --output=avail "$_mnt" 2>/dev/null | tail -1 | tr -d ' ')" >&2
+    done < /proc/mounts
+    if [ "$_found" = "1" ]; then
+        echo "" >&2
+        echo "       Did you mean one of those? e.g. export IDM_ROOT=/pvc/idm" >&2
+    else
+        echo "       No writable non-root mounts found - this container has no" >&2
+        echo "       storage attached. Set Storage > Container Path when creating" >&2
+        echo "       the Workshop." >&2
+    fi
     exit 1
 fi
 
