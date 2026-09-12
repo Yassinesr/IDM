@@ -32,13 +32,20 @@ CKPT_FILES = {
 NAME_HINTS = ("idm", "vton", "viton", "ip-adapter", "ip_adapter",
               "stable-diffusion-xl", "sdxl", "clip-vit")
 
+# Subtrees that cannot hold the model and are enormous - on Alaya, datasets/ is
+# 48 TB on its own. Skipping them is the difference between a 30s scan and one
+# that never finishes.
+SKIP_DIRS = {"datasets", "tmp", ".git", "__pycache__", "lost+found"}
 
-def walk(root, max_depth, deadline):
+
+def walk(root, max_depth, deadline, skip):
     """Bounded-depth scandir. A 461 TB mount will not be walked exhaustively."""
     stack = [(root, 0)]
+    seen = 0
     while stack:
         if time.time() > deadline:
-            print(f"  (time budget reached; re-run with --max-seconds to go deeper)",
+            print(f"\n  (time budget reached after {seen} directories; "
+                  f"raise --max-seconds or --max-depth to go further)",
                   file=sys.stderr)
             return
         path, depth = stack.pop()
@@ -48,32 +55,45 @@ def walk(root, max_depth, deadline):
             entries = list(os.scandir(path))
         except (PermissionError, OSError):
             continue
+        seen += 1
+        if seen % 500 == 0:
+            print(f"\r  scanned {seen} directories...", end="", file=sys.stderr,
+                  flush=True)
         dirnames = {e.name for e in entries if e.is_dir(follow_symlinks=False)}
         filenames = {e.name for e in entries if e.is_file(follow_symlinks=False)}
         yield path, dirnames, filenames
         for e in entries:
-            if e.is_dir(follow_symlinks=False):
+            if e.is_dir(follow_symlinks=False) and e.name not in skip:
                 stack.append((e.path, depth + 1))
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("root", nargs="?", default="/root/public")
-    ap.add_argument("--max-depth", type=int, default=5)
-    ap.add_argument("--max-seconds", type=int, default=120)
+    ap.add_argument("root", nargs="?", default=None,
+                    help="default: /root/public/models if it exists, else /root/public")
+    ap.add_argument("--max-depth", type=int, default=7)
+    ap.add_argument("--max-seconds", type=int, default=180)
+    ap.add_argument("--all", action="store_true",
+                    help="also descend into datasets/ and tmp/ (very slow)")
     args = ap.parse_args()
 
-    root = Path(args.root)
+    if args.root:
+        root = Path(args.root)
+    else:
+        models = Path("/root/public/models")
+        root = models if models.is_dir() else Path("/root/public")
     if not root.is_dir():
         print(f"{root} is not a directory", file=sys.stderr)
         return 1
 
-    print(f"scanning {root} (depth {args.max_depth}, {args.max_seconds}s budget)\n")
+    skip = set() if args.all else SKIP_DIRS
+    print(f"scanning {root} (depth {args.max_depth}, {args.max_seconds}s budget"
+          + (", skipping " + "/".join(sorted(skip)) if skip else "") + ")\n")
     deadline = time.time() + args.max_seconds
 
     idm, sdxl, ckpts, hinted = [], [], {}, []
 
-    for path, dirnames, filenames in walk(str(root), args.max_depth, deadline):
+    for path, dirnames, filenames in walk(str(root), args.max_depth, deadline, skip):
         if IDM_MARKERS <= dirnames:
             idm.append(path)
         elif SDXL_MARKERS <= dirnames:

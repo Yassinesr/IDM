@@ -122,7 +122,15 @@ if [ "$ACTUAL_PY" != "3.10" ]; then
     exit 1
 fi
 
-export PIP_CACHE_DIR="$IDM_ROOT/pipcache"
+# The pip cache earns its keep on a PVC (a rebuilt Workshop reuses it) but is
+# dead weight on the ephemeral disk, where a rebuild means a new container
+# anyway - and there it costs several GB of a ~28 GB budget.
+if [ "${IDM_ALLOW_EPHEMERAL:-0}" = "1" ]; then
+    export PIP_NO_CACHE_DIR=1
+    echo "==> ephemeral disk: pip cache disabled to save space"
+else
+    export PIP_CACHE_DIR="$IDM_ROOT/pipcache"
+fi
 # Deliberately an env var, NOT `pip config set`: that writes to the user-level
 # ~/.config/pip/pip.conf, which on a shared Workshop changes pip's index for
 # everyone else using that home directory. This stays scoped to this process.

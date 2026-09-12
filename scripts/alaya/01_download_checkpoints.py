@@ -116,6 +116,8 @@ def main() -> int:
                     help="only fetch the small preprocessing checkpoints")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would download and how big, then exit")
+    ap.add_argument("--force", action="store_true",
+                    help="download even if free disk looks insufficient")
     ap.add_argument("--slim", action="store_true",
                     help="skip .bin weights that have a .safetensors twin; "
                          "roughly halves the model download on a small disk")
@@ -136,6 +138,7 @@ def main() -> int:
               "         Run `source scripts/alaya/env.sh` first.", file=sys.stderr)
 
     ignore = None
+    sizes = None
     if not args.skip_model and (args.dry_run or args.slim):
         print(f"\n[sizes] {MODEL_REPO}")
         try:
@@ -159,6 +162,41 @@ def main() -> int:
             print(f"      could not read space metadata: {exc}", file=sys.stderr)
         print("\nDry run only - nothing downloaded.")
         return 0
+
+    if not args.skip_model and not args.force:
+        # Filling the container disk does not just fail the download - it can
+        # wedge the whole Workshop, so check before starting rather than after.
+        need = None
+        try:
+            sizes_for_check = sizes or repo_sizes(MODEL_REPO)
+            from fnmatch import fnmatch
+            pats = ignore or []
+            need = sum(n for f, n in sizes_for_check.items()
+                       if not any(fnmatch(f, p) for p in pats))
+        except Exception:
+            pass  # metadata unavailable; fall through and let it run
+
+        if need:
+            target = Path(os.environ.get("HF_HOME") or Path.home() / ".cache/huggingface")
+            probe = target
+            while not probe.exists() and probe != probe.parent:
+                probe = probe.parent
+            free = shutil.disk_usage(probe).free
+            headroom = need * 1.15  # unpacking and .incomplete files need slack
+            print(f"\n[disk] need ~{need / 2**30:.1f} GB, free {free / 2**30:.1f} GB "
+                  f"on {probe}")
+            if free < headroom:
+                print(f"\nERROR: not enough free space for the model.", file=sys.stderr)
+                print(f"       need ~{headroom / 2**30:.1f} GB including slack, "
+                      f"have {free / 2**30:.1f} GB.", file=sys.stderr)
+                if not args.slim:
+                    print("       Try --slim first; it skips duplicate weight "
+                          "formats.", file=sys.stderr)
+                print("       Otherwise attach a PVC, point a local copy at "
+                      "IDM_MODEL_PATH\n"
+                      "       (scripts/alaya/find_local_models.py), or "
+                      "override with --force.", file=sys.stderr)
+                return 1
 
     if not args.skip_model:
         print(f"\n[1/2] {MODEL_REPO} (model) -> HF cache")

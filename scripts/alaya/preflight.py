@@ -90,8 +90,14 @@ def main():
             # not a PVC - a plain mkdir looks identical until the Workshop is
             # released and the weights go with it.
             if os.stat(idm_root).st_dev == os.stat("/").st_dev:
-                fail(f"{idm_root} is on the container root filesystem, not a PVC",
-                     "recreate the Workshop with Storage > Container Path set")
+                if os.environ.get("IDM_ALLOW_EPHEMERAL") == "1":
+                    warn(f"{idm_root} is on the ephemeral container disk "
+                         "(IDM_ALLOW_EPHEMERAL=1) - everything here is lost when "
+                         "the Workshop is released")
+                else:
+                    fail(f"{idm_root} is on the container root filesystem, not a PVC",
+                         "recreate the Workshop with Storage > Container Path set, "
+                         "or set IDM_ALLOW_EPHEMERAL=1 to accept the loss")
             else:
                 ok(f"{idm_root} is a real mount, separate from /")
         except OSError as exc:
