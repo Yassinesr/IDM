@@ -1,0 +1,6 @@
+# Extra dependencies for train_xl.py. Not needed for inference or the demo.
+-r requirements.txt
+
+# Imported lazily inside train_xl.py, only under --use_8bit_adam.
+# Note this old pin has no wheel for python 3.11+; newer releases do.
+bitsandbytes==0.39.0
