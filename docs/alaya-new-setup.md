@@ -17,6 +17,72 @@ Two ways to get an environment into it:
 
 ---
 
+## Quickstart — I just created a CCI, now what?
+
+Run these in order. Step 1 decides everything else, so do not skip it.
+
+```bash
+# 1. Is persistent storage attached? (no repo needed yet)
+df -h | grep -v tmpfs
+```
+
+Look for a mount that is **not** `/` and **not** `/root/public`. Typically
+`/pvc`.
+
+| What you see | What it means | Go to |
+|---|---|---|
+| a large writable mount, e.g. `/pvc` | storage attached | step 2 |
+| only `/` and `/root/public` | **no storage** — anything you build is lost on release | §2.1.1 |
+
+Do not be tempted by `/anc-init`. It is large (867 GB) and writable, but it is
+the node's own disk, not yours: it does not follow the pod when rescheduled,
+and on a shared cluster you are filling space your neighbours depend on.
+`/etc/hostname` showing a 3.4 TB filesystem is a bind-mounted *file*, not
+storage you can use.
+
+```bash
+# 2. Get the repo. From China, prefer the bundle (§2.2) - this clone is slow.
+export IDM_ROOT=/pvc/idm          # <- your real mount + /idm
+mkdir -p "$IDM_ROOT" && cd "$IDM_ROOT"
+git clone -b claude/alaya-new-cloud-setup-4ode4d \
+    https://github.com/Yassinesr/IDM.git IDM
+cd IDM
+
+# 3. Confirm storage properly, and that the mount really persists
+bash scripts/alaya/check_storage.sh
+
+# 4. Build the environment (~15 min; provisions python 3.10 if the image is 3.12)
+bash scripts/alaya/00_bootstrap_workshop.sh
+source scripts/alaya/env.sh
+
+# 5. Look for the weights locally before downloading tens of GB
+python scripts/alaya/find_local_models.py
+
+# 6a. If step 5 found a model:
+export IDM_MODEL_PATH=<path it printed>
+python scripts/alaya/01_download_checkpoints.py --skip-model
+
+# 6b. If it did not:
+python scripts/alaya/01_download_checkpoints.py --dry-run   # check the size first
+python scripts/alaya/01_download_checkpoints.py
+
+# 7. Check, then generate
+python scripts/alaya/preflight.py
+python scripts/alaya/demo_single.py --output "$IDM_ROOT/out/demo.png"
+```
+
+Three things that have caught people out, each covered below:
+
+- **Storage is two steps.** Creating a volume in 存储管理 and attaching it to a
+  Workshop via the **Container Path** field are separate; doing only the first
+  looks fine until the container is released (§2.1.1).
+- **The base images ship python 3.12**, which this stack cannot run. The
+  bootstrap provisions 3.10 itself (§2.1).
+- **Stopping is not releasing.** 关机 auto-saves an image and keeps your disk;
+  释放 discards it (§2.1.3).
+
+---
+
 ## 0. Before you start
 
 1. **Accounts.** Log in to the platform, then install the **Aladdin** extension
@@ -58,23 +124,146 @@ session** — a fresh Workshop is a fresh container.
 
 ---
 
+## 1.1 If the cluster, PVC or Workshop is shared
+
+Two different things get called "shared", and they carry different risks:
+
+**A shared-type (共享型) cluster, your own Workshop.** Your container is yours —
+processes, ports and `$HOME` are private. What you share is the *PVC* and the
+*GPU quota*. So:
+
+- Set `IDM_USER` before sourcing `env.sh`, which moves your tree to
+  `/pvc/users/$IDM_USER/idm`. Without it everyone lands on `/pvc/idm` and the
+  first `rm -rf $IDM_VENV` takes out someone else's environment too.
+- Consider one shared weights cache: `export IDM_SHARED_HF=/pvc/shared/hf`. The
+  model is tens of GB and byte-identical for everyone, and the hub client locks
+  per file, so concurrent readers are safe.
+- Use your own **Namespace** in the Workshop dialog (§3.3).
+
+**One Workshop that several people log into.** Now you also share the container:
+one process table, one set of ports, one `$HOME`, one GPU.
+
+- Never `pip config set` anything — it writes `~/.config/pip/pip.conf` and
+  changes pip's index for everyone. Use `PIP_INDEX_URL=...` per command instead.
+  (`00_bootstrap_workshop.sh` does exactly this.)
+- Check the GPU before launching: `nvidia-smi`. A 768×1024 run wants ~24 GB, so
+  two people at once on a 80 GB card is fine and three is not. `preflight.py`
+  reports who else is on the card.
+- Pin yourself to one GPU if there are several: `export CUDA_VISIBLE_DEVICES=1`.
+- Pick your own gradio port — `GRADIO_SERVER_PORT=7861` — or you will collide,
+  and never `kill` a python process you did not start.
+- Write outputs to your own path: `--output "$IDM_ROOT/out/demo.png"`.
+
+`python scripts/alaya/preflight.py` reports all of this: other processes on the
+GPU, per-GPU memory, whether `IDM_USER` is set, and whether a shared `pip.conf`
+exists.
+
 ## 2. Path A — official image + venv (recommended)
 
 ### 2.1 Create the Workshop
 
-In VS Code: Aladdin icon → **`+`** next to *Workshop*, then follow the official
-*如何创建Workshop* doc. What matters for this repo:
+In VS Code: Aladdin icon → **`+`** next to *Workshop*. Field by field:
 
-- **Environment**: an official CUDA/PyTorch image. Prefer one with **Python
-  3.10** — `bitsandbytes==0.39.0` and `onnxruntime==1.16.2` have no wheels for
-  newer Pythons on every platform. If you only get 3.11+, the bootstrap script
-  warns and tells you how to fall back to conda.
-- **PVC MOUNTS**: select your storage and remember the mount path.
-- **Namespace**: on a dedicated cluster it is pre-assigned; on a shared cluster
-  see §3.3.
-- GPU count: 1 is enough for inference. Training (`train_xl.sh`) assumes 4.
+| Field | Set it to | Why |
+|---|---|---|
+| **Name** | anything, e.g. `IDM-VTON` | — |
+| **Image** | **Base Image** | you build the env yourself in §2.2 |
+| **Framework / Version** | pytorch, any version | irrelevant — the venv installs its own torch 2.0.1 and ignores the image's |
+| **Python** | **3.10 if the dropdown offers it** | see below |
+| **CUDA** | any | pip torch wheels bundle their own CUDA runtime; only the host driver matters, and it is new enough |
+| **Resource** | GPU, 1× is plenty | an H800-80G has far more VRAM than the ~24 GB this needs |
+| **Storage** | **must be filled in — see §2.1.1** | the default leaves it empty, which is the trap |
+
+**Python is the one field that genuinely constrains you.** Pick 3.10 if it's
+offered. If the only choice is 3.12 (the current Alaya default), that's fine —
+the bootstrap script detects it and provisions 3.10 via Miniconda onto the PVC,
+costing about 5 extra minutes once. What you cannot do is run the stack *on*
+3.12: `torch==2.0.1` publishes no cp312 wheel at all, and neither do
+`bitsandbytes==0.39.0` or `onnxruntime==1.16.2`.
+
+### 2.1.1 Storage — provision it before you open this dialog
+
+The Storage row has a type dropdown (`nas-capacity`), a **volume** dropdown, and
+a **Container Path** box.
+
+**If the volume dropdown says "no data to select", you have no NAS volume yet.**
+Aladdin only lists volumes that already exist; it cannot create one. Go to the
+platform web console → 产品中心 → **存储管理**, create a file/NAS volume of
+**100 GB+** in the *same cluster* as the GPU you'll use (GPU1 per §0), then
+reopen this dialog. If 存储管理 offers no create button, storage has not been
+authorised for your account and an admin has to allocate it.
+
+Once the volume exists, fill in all three parts:
+
+- volume: the one you just created;
+- capacity: 100 GB+ — the weights alone are tens of GB;
+- **Container Path**: e.g. `/pvc`.
+
+A blank Container Path means **no PVC is mounted at all**. Everything then lands
+on the container's own disk (50 GB on the standard H800 flavour), which fills
+partway through the model download and is wiped when the Workshop goes away.
+Then `export IDM_ROOT=/pvc/idm` in §2.2 — a subdirectory of the mount, so the
+repo, env and caches stay tidy under one root.
+
+Also worth setting: **Namespace** is pre-assigned on a dedicated cluster; on a
+shared cluster see §3.3. GPU count 1 is enough for inference — training
+(`train_xl.sh`) assumes 4.
 
 VS Code opens a new window attached to the Workshop.
+
+### 2.1.2 Verify storage before anything else
+
+The moment a new Workshop opens, before cloning or building:
+
+```bash
+bash scripts/alaya/check_storage.sh
+```
+
+It lists every mount, marks which are ephemeral, and says whether anything here
+survives a release. Two distinctions it makes that matter:
+
+- **Read-only** mounts (`/root/public`) are a model library, not workspace.
+- **Writable but local** is the trap. A PVC normally appears as `nfs`/`cephfs`.
+  A large writable *local* mount is usually the node's scratch: Alaya's
+  `/anc-init` is 867 GB of exactly that. It does not follow the pod when it is
+  rescheduled, and on a shared cluster you are filling a disk your neighbours
+  are using. The script flags these separately rather than recommending them.
+
+It exits non-zero when nothing persistent is attached, so it also works as a
+guard at the top of a longer script.
+
+The only real proof is a round trip. Before a long download, drop a marker and
+look for it next session:
+
+```bash
+echo "written $(date -Is)" > /pvc/.idm-persistence-check
+```
+
+### 2.1.3 If no storage is attached, must I rebuild?
+
+Sometimes. Check rather than assume:
+
+```bash
+bash scripts/alaya/check_mount_capability.sh
+```
+
+Being root in a container is not enough to mount anything — `mount()` needs
+`CAP_SYS_ADMIN`, which Kubernetes drops for unprivileged pods, and FUSE needs
+`/dev/fuse`. The script reports both, then settles it by actually mounting a
+tmpfs.
+
+Two things worth knowing before assuming a rebuild is required:
+
+- **Stopping is not releasing.** The login banner says
+  *系统盘为临时工作空间，变更内容在容器实例释放后消失，在关机时自动保存镜像* —
+  the container disk is lost when the instance is **released** (释放), but an
+  image is auto-saved on **shutdown** (关机). So a graceful stop/start keeps
+  your work. Do not rely on it for tens of GB of weights, but it does mean a
+  Workshop can often be stopped, edited to add a mount, and started again
+  rather than rebuilt.
+- **A hand-made mount is not a PVC.** Even where `mount -t nfs` works, it does
+  not survive a restart, and it sidesteps the platform's quota accounting.
+  Fine as a stopgap; not the durable answer.
 
 ### 2.2 Set up the environment
 
@@ -85,32 +274,136 @@ df -h                                   # confirm the PVC mount path
 export IDM_ROOT=/pvc/idm                # <- your actual mount path
 
 mkdir -p "$IDM_ROOT" && cd "$IDM_ROOT"
-git clone https://github.com/Yassinesr/IDM.git IDM-VTON
+# -b matters: these scripts live on the setup branch, not on main.
+git clone -b claude/alaya-new-cloud-setup-4ode4d \
+    https://github.com/Yassinesr/IDM.git IDM-VTON
 cd IDM-VTON
 
 bash scripts/alaya/00_bootstrap_workshop.sh
 ```
 
-That creates the venv on the PVC, installs torch 2.0.1+cu118 and
-`requirements.txt`, and prints the GPUs it can see. It is idempotent — re-run it
-after a Workshop rebuild and pip serves most of it from the PVC cache.
+That builds the environment on the PVC — a plain venv if the image already has
+python 3.10, otherwise a Miniconda-provisioned 3.10 env (§2.1) — installs torch
+and `requirements.txt`, and prints the GPUs it can see. It is idempotent: re-run
+it after a Workshop rebuild and pip serves most of it from the PVC cache.
+
+Two overrides, if the defaults don't suit your cluster:
+
+```bash
+# use a different wheel index (default: https://download.pytorch.org/whl/cu118)
+TORCH_INDEX_URL=https://mirror.sjtu.edu.cn/pytorch-wheels/cu118 \
+    bash scripts/alaya/00_bootstrap_workshop.sh
+# force a specific torch version
+TORCH_VERSION=2.4.1 bash scripts/alaya/00_bootstrap_workshop.sh
+```
+
+The script asks the index which torch versions it has and takes the first of
+`2.0.1 2.2.2 2.4.1 2.5.1` that is present, mapping torchvision to match. It
+prefers 2.0.1 because that is what `environment.yaml` names, but nothing here
+actually requires it (§4) — and as of 2026 neither the official cu118 index nor
+`mirror.sjtu.edu.cn` still carries it. Both start at 2.2.0, so in practice this
+settles on **torch 2.2.2 + torchvision 0.17.2**. Seeing
+`2.0.1 is not on this index` is expected, not a problem. Every candidate is cu118 or newer, because
+an H800 is sm_90 and cu117 builds have no kernels for it.
+
+For training, add the extra dependency afterwards:
+
+```bash
+pip install -r requirements-train.txt
+```
+
+### 2.2.1 Getting the repo across when GitHub is slow
+
+Cloning from inside China can be unusable. Ship it from a machine that already
+has the repo instead:
+
+```powershell
+# Windows
+cd C:\Users\hp\Desktop\IDM
+.\scripts\alaya\sync_from_windows.ps1 -SshHost idm-1.bj5
+```
+
+```bash
+# macOS / Linux
+bash scripts/alaya/bundle_for_workshop.sh idm-1.bj5
+```
+
+**Send a git bundle, not a zip.** A zip of the working tree arrives without
+usable history, so the copy on the Workshop cannot `git pull` and you re-zip for
+every subsequent change — and it is easy to end up debugging a stale checkout
+without realising it. A bundle is smaller (packed history, ~25 MB against a
+78 MB tree) and leaves a real repo pointing at GitHub, so only this first hop is
+special.
+
+If you already sent a zip, check what you have:
+
+```bash
+ls -d .git                                          # history survived?
+grep -c dry-run scripts/alaya/01_download_checkpoints.py   # 0 means stale
+```
+
+`Compress-Archive -Path IDM` normally does include `.git`, but
+`Compress-Archive -Path IDM\*` does not — the wildcard skips hidden entries.
 
 ### 2.3 Every session after that
 
+A new Workshop terminal starts with none of this set, so:
+
 ```bash
 export IDM_ROOT=/pvc/idm
+cd "$IDM_ROOT/IDM-VTON"
 source scripts/alaya/env.sh
 ```
 
-### 2.4 Download the checkpoints
+### 2.4 Check the shared library first
+
+Alaya mounts a read-only model library at `/root/public` (a CephFS share,
+hundreds of TB). If IDM-VTON is already there, you skip the largest download
+entirely — which matters a lot when no PVC is attached:
+
+```bash
+python scripts/alaya/find_local_models.py            # scans /root/public
+python scripts/alaya/find_local_models.py /root/public --max-depth 7
+```
+
+It identifies an IDM-VTON checkout structurally rather than by name: stock SDXL
+has `unet/` but no `unet_encoder/`, so a directory holding both is IDM-VTON
+whatever it is called. Scanning is depth- and time-bounded, since the mount is
+far too large to walk exhaustively.
+
+If it finds one:
+
+```bash
+export IDM_MODEL_PATH=/root/public/<whatever it printed>
+python scripts/alaya/demo_single.py                  # no download
+```
+
+The four preprocessing checkpoints are small, so download them normally:
+
+```bash
+python scripts/alaya/01_download_checkpoints.py --skip-model
+```
+
+### 2.5 Download whatever is still missing
 
 The `ckpt/*` files in git are **placeholders** — literally files containing
 `put ip adapter ckpt here`. Nothing runs until you replace them.
 
 ```bash
+python scripts/alaya/01_download_checkpoints.py --dry-run   # measure first
 python scripts/alaya/01_download_checkpoints.py             # inference
 python scripts/alaya/01_download_checkpoints.py --training  # + IP-Adapter
 ```
+
+`--dry-run` reads the Hub metadata and prints a per-directory size table without
+downloading a byte — worth running once so you know what you are committing to
+before it starts.
+
+`--slim` skips any `.bin` that has a `.safetensors` twin (same tensors, two
+formats) plus the Flax/TF ports nothing here loads. A `.bin` with no safetensors
+sibling is still downloaded, so nothing the pipeline needs goes missing. On a
+typical diffusers repo this roughly halves the download; combine with
+`--dry-run` to see the exact saving for this repo.
 
 This pulls, via `$HF_ENDPOINT` (defaults to `hf-mirror.com`, because
 huggingface.co is not routable from the cluster):
@@ -125,9 +418,53 @@ huggingface.co is not routable from the cluster):
 
 The download is resumable — if it drops, just run it again.
 
-### 2.5 Run
+### 2.6 Verify before you burn GPU time
 
-**Gradio demo:**
+```bash
+python scripts/alaya/preflight.py
+```
+
+One PASS/FAIL line per check: venv, PVC paths, free disk, GPU and VRAM, the
+version pins, and whether each `ckpt/*` file is real or still a placeholder. If
+something is wrong, paste the whole output when asking for help — it is meant to
+be the only thing needed to diagnose a Workshop.
+
+### 2.7 Run one image, headlessly
+
+Do this **before** the gradio demo. It runs the identical pipeline from the
+terminal on the examples already bundled in the repo, so a broken environment
+surfaces as a stack trace instead of a blank browser tab — and there is no port
+forwarding in the way.
+
+```bash
+python scripts/alaya/demo_single.py                 # writes demo_out.png
+python scripts/alaya/demo_single.py --list          # 9 people, 16 garments
+```
+
+Pick your own pair, and describe the garment — the description goes into the
+prompt, so it changes the result:
+
+```bash
+python scripts/alaya/demo_single.py \
+    --human   "gradio_demo/example/human/00034_00.jpg" \
+    --garment "gradio_demo/example/cloth/04469_00.jpg" \
+    --desc    "a red short-sleeve t-shirt" \
+    --output  "$IDM_ROOT/out/demo.png" --save-mask
+```
+
+Useful flags: `--steps` (30 default, 20 is faster and usually fine), `--seed`,
+`--category {upper_body,lower_body,dresses}`, `--crop` for phone photos that are
+not already 3:4, and `--save-mask` when a result looks wrong — a bad
+auto-generated mask is the usual cause.
+
+The **first** run downloads the model, so it takes a while and most of that is
+network, not GPU. Later runs reuse the PVC cache. The script prints load time,
+generate time and peak GPU memory.
+
+To look at the PNG: it is on the PVC, so the VS Code Explorer in the Workshop
+window opens it directly — click the file.
+
+### 2.8 Run the gradio demo
 
 ```bash
 bash scripts/alaya/02_run_gradio.sh
@@ -137,7 +474,7 @@ It binds `0.0.0.0:7860`. VS Code's **PORTS** panel forwards it to your laptop
 automatically; if it doesn't, *Forward a Port* → `7860` and open the localhost
 link.
 
-**Batch inference on VITON-HD:**
+### 2.9 Batch inference on VITON-HD
 
 ```bash
 export IDM_DATA_DIR=$IDM_ROOT/data/zalando   # per the README layout
@@ -147,7 +484,7 @@ bash scripts/alaya/03_run_inference.sh       # add --paired for the paired setti
 This exists because the repo's own `inference.sh` hardcodes
 `/home/omnious/workspace/yisol/...`, which does not exist on your Workshop.
 
-**Training** still uses the repo's `train_xl.sh`; edit `--data_dir` in it, and
+Training still uses the repo's `train_xl.sh`; edit `--data_dir` in it, and
 note it sets `CUDA_VISIBLE_DEVICES=0,1,2,3`.
 
 ---
@@ -249,11 +586,35 @@ These are real and will cost you time otherwise:
   `from huggingface_hub import cached_download`, removed in 0.26.0, and that
   import is on the `DiffusionPipeline` path — so it fails at import, not at
   download. `requirements.txt` pins `0.25.2`.
-- **`numpy` must stay on 1.x.** torch 2.0.1 is not built against the NumPy 2
-  ABI. Pinned to `1.26.4`.
-- **Install torch before `requirements.txt`.** `basicsr` imports torch inside
-  its own `setup.py`. Both bootstrap paths order it correctly.
+- **`numpy` must stay on 1.x.** torch, scipy and onnxruntime here are all built
+  against the NumPy 1.x ABI and fail outright on 2.x. Pinned to `1.26.4` — but
+  the pin only binds when `requirements.txt` is what you install. A bare
+  `pip install <anything>` can quietly pull numpy forward and break the
+  environment, so install alongside the pin:
+  `pip install "numpy==1.26.4" <package>`.
+- **torch 2.0.1 is a preference, not a requirement.** `environment.yaml` names
+  it, but the only dependency that constrained torch was `basicsr`, which
+  imports `torchvision.transforms.functional_tensor` (removed in torchvision
+  0.17). `basicsr` is never actually imported here — the single import site is a
+  lazy one in `preprocess/openpose/annotator/openpose/__init__.py`, reached only
+  when `ckpt/openpose/ckpts/body_pose_model.pth` is missing, and the download
+  script always puts it there. So it is dropped from `requirements.txt`, and
+  newer torch works.
+- **`torchaudio` and `bitsandbytes` are not inference dependencies.**
+  `torchaudio` has zero import sites in this repo. `bitsandbytes` is imported
+  lazily in `train_xl.py` under `--use_8bit_adam` only, so it lives in
+  `requirements-train.txt`.
 - **`ckpt/*` in git are placeholders**, not weights (§2.4).
+- **`environment.yaml` is missing two runtime dependencies.** `scikit-image` and
+  `matplotlib` are imported unconditionally — the first by
+  `preprocess/openpose/annotator/openpose/hand.py`, which `__init__.py` loads
+  even though hand detection is never enabled, and the second by those same
+  openpose modules and by `gradio_demo/densepose/vis/`, which `apply_net.py`
+  imports at module level. `requirements.txt` adds both.
+- **Python must be 3.10.** `torch==2.0.1` has no cp311/cp312 wheel, so a 3.12
+  base image cannot run this stack directly. `00_bootstrap_workshop.sh`
+  provisions 3.10 via Miniconda on the PVC when it finds anything else, and
+  refuses to continue if the resulting env is still not 3.10.
 - **The bundled detectron2 is compiled for Python 3.9.**
   `gradio_demo/detectron2/_C.cpython-39-x86_64-linux-gnu.so` will not import on
   3.10 — this is *harmless*. The import sits in a `try/except ImportError` in
@@ -278,9 +639,24 @@ These are real and will cost you time otherwise:
 | Weights re-download after a Workshop restart | `HF_HOME` not on the PVC | `source scripts/alaya/env.sh` before anything |
 | `FileNotFoundError` on a `ckpt/...` path | still the placeholder | `python scripts/alaya/01_download_checkpoints.py` |
 | `RuntimeError: Numpy is not available` | NumPy 2 got pulled in | `pip install "numpy==1.26.4"` |
+| `_ARRAY_API not found` / `numpy.core.multiarray failed to import` | same: NumPy 2 broke modules built against the 1.x ABI | `pip install "numpy==1.26.4"` — and pin it in the *same* command whenever installing anything else |
+| `ImportError: libGL.so.1: cannot open shared object file` | `opencv-python` wants a GUI backend the server image lacks | `pip uninstall -y opencv-python && pip install opencv-python-headless` (now the default in `requirements.txt`) |
+| preflight fails on free space although the model is downloaded | older preflight demanded 60 GB unconditionally | update your checkout; it now needs 5 GB once the weights are cached |
 | `torch.cuda.is_available()` is False | Workshop has no GPU attached | check the GPU count in the Workshop settings |
+| `No matching distribution found for torch==2.0.1`, and the listed versions all start at 2.2 | the mirror does not carry 2.0.1 | nothing to do — current bootstrap falls back automatically; or `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu118` |
+| `No matching distribution found for torch==2.0.1`, and no versions are listed | env is on python 3.11/3.12 | `rm -rf $IDM_VENV && bash scripts/alaya/00_bootstrap_workshop.sh` |
+| `venv already exists` but it is the wrong python | stale env from an earlier attempt | `rm -rf $IDM_VENV` and re-run the bootstrap |
+| `CondaToSNonInteractiveError` | Anaconda's default channels now demand ToS acceptance | nothing to do — the bootstrap uses `conda-forge` with `--override-channels`; update your checkout |
+| `No such file or directory` for a python that is on PATH | the venv was deleted mid-session, PATH and bash's hash still point into it | `source scripts/alaya/env.sh` cleans it, or start a new shell |
+| `no kernel image is available for execution on the device` | cu117 torch on an sm_90 GPU | reinstall from a cu118+ index |
+| `No space left on device` mid-download | Container Path was left blank, so there is no PVC | recreate the Workshop with Storage set (§2.1.1) |
+| Storage volume dropdown is empty ("no data to select") | no NAS volume exists yet | create one in 产品中心 → 存储管理 (§2.1.1) |
 | Demo unreachable in the browser | gradio on 127.0.0.1 | `export GRADIO_SERVER_NAME=0.0.0.0`, forward 7860 in PORTS |
+| gradio: `TypeError: unhashable type: 'dict'` on every request, then `When localhost is not accessible, a shareable link must be created` | starlette 1.x removed the old `TemplateResponse` signature gradio 4.24.0 uses | `pip install -r requirements.txt` — it now pins `starlette<1.0` |
 | `kubectl` works, then stops after reopening PowerShell | `$env:KUBECONFIG` is per-window | re-export it |
+| `CUDA out of memory` during generation | 768×1024 is heavy | `--steps 20`, or a Workshop with more VRAM |
+| Try-on output looks wrong / garment in the wrong place | bad auto-mask | `--save-mask` and inspect; try `--category`, or `--crop` |
+| `FileNotFoundError: ./configs/densepose_...yaml` | run from the wrong directory | `demo_single.py` chdirs for you; for `app.py`, run from the repo root |
 
 ---
 
@@ -288,11 +664,20 @@ These are real and will cost you time otherwise:
 
 | File | Purpose |
 |---|---|
+| `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
+| `scripts/alaya/check_mount_capability.sh` | can this container mount storage itself? |
+| `scripts/alaya/bundle_for_workshop.sh` | ship the repo over SSH when GitHub is slow (macOS/Linux) |
+| `scripts/alaya/sync_from_windows.ps1` | same, from PowerShell |
 | `scripts/alaya/env.sh` | per-session env: PVC paths, caches, HF mirror |
+| `scripts/alaya/_activate.sh` | activates either the venv or the conda fallback |
 | `scripts/alaya/00_bootstrap_workshop.sh` | build the venv on the PVC (Path A) |
 | `scripts/alaya/01_download_checkpoints.py` | fetch all weights, mirror-aware |
+| `scripts/alaya/preflight.py` | PASS/FAIL environment check; paste its output when stuck |
+| `scripts/alaya/demo_single.py` | headless one-image try-on, no browser needed |
+| `scripts/alaya/find_local_models.py` | finds usable weights in `/root/public` before you download |
 | `scripts/alaya/02_run_gradio.sh` | launch the demo with port forwarding |
 | `scripts/alaya/03_run_inference.sh` | VITON-HD inference with PVC paths |
 | `scripts/alaya/k8s_bootstrap.sh` | namespace + pull secret + SA patch (Path B) |
 | `Dockerfile`, `.dockerignore` | custom image (Path B) |
-| `requirements.txt` | pip deps with the pins that matter |
+| `requirements.txt` | inference pip deps, with the pins that matter |
+| `requirements-train.txt` | adds `bitsandbytes` for `train_xl.py` |
