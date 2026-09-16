@@ -222,8 +222,28 @@ def main():
     else:
         human_img = human_img_orig.resize((768, 1024))
 
+    # Everything downstream force-resizes to 3:4. A photo far from that ratio
+    # gets squashed, and a squashed person is often no longer detectable.
+    w0, h0 = human_img_orig.size
+    ratio = (w0 / h0) / 0.75
+    if not args.crop and not (0.9 < ratio < 1.11):
+        print(f"WARNING: {_rel(human_path)} is {w0}x{h0} ({w0/h0:.2f}:1), not 3:4. "
+              f"It will be squashed to 768x1024.\n"
+              f"         Pass --crop to centre-crop to 3:4 instead.", file=sys.stderr)
+
     print("preprocessing: openpose -> human parsing -> mask -> densepose")
-    keypoints = openpose_model(human_img.resize((384, 512)))
+    try:
+        keypoints = openpose_model(human_img.resize((384, 512)))
+    except IndexError:
+        # run_openpose.py indexes subset[0] unconditionally; an empty subset
+        # means the pose estimator found nobody, which surfaces as IndexError.
+        print(f"\nERROR: OpenPose found no person in {_rel(human_path)}.\n"
+              "       --human must be a PHOTO OF A PERSON; --garment is the\n"
+              "       flat-lay clothing image. Swapping them causes exactly this.\n"
+              "       Otherwise the person may be too small, cropped, turned away,\n"
+              "       or distorted by a non-3:4 aspect ratio (try --crop).",
+              file=sys.stderr)
+        return 1
     model_parse, _ = parsing_model(human_img.resize((384, 512)))
     mask, _ = get_mask_location("hd", args.category, model_parse, keypoints)
     mask = mask.resize((768, 1024))
