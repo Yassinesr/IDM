@@ -652,6 +652,7 @@ These are real and will cost you time otherwise:
 | `No space left on device` mid-download | Container Path was left blank, so there is no PVC | recreate the Workshop with Storage set (§2.1.1) |
 | Storage volume dropdown is empty ("no data to select") | no NAS volume exists yet | create one in 产品中心 → 存储管理 (§2.1.1) |
 | Demo unreachable in the browser | gradio on 127.0.0.1 | `export GRADIO_SERVER_NAME=0.0.0.0`, forward 7860 in PORTS |
+| gradio: `TypeError: unhashable type: 'dict'` on every request, then `When localhost is not accessible, a shareable link must be created` | starlette 1.x removed the old `TemplateResponse` signature gradio 4.24.0 uses | `pip install -r requirements.txt` — it now pins `starlette<1.0` |
 | `kubectl` works, then stops after reopening PowerShell | `$env:KUBECONFIG` is per-window | re-export it |
 | `CUDA out of memory` during generation | 768×1024 is heavy | `--steps 20`, or a Workshop with more VRAM |
 | Try-on output looks wrong / garment in the wrong place | bad auto-mask | `--save-mask` and inspect; try `--category`, or `--crop` |

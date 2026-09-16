@@ -43,6 +43,14 @@ matplotlib==3.8.4
 # which IDM-VTON never enables (hand_estimation is commented out).
 opencv-python-headless
 gradio==4.24.0
+# gradio 4.24.0 declares a bare `fastapi` with no upper bound, and fastapi 0.140
+# dropped its own starlette cap (it now asks only for >=0.46.0). So pip installs
+# starlette 1.x, which finally removed the deprecated
+# TemplateResponse(name, context) signature that gradio/routes.py:375 still uses.
+# The context dict then arrives where the template name belongs and jinja2 raises
+# "TypeError: unhashable type: 'dict'" on every page load. The compatibility shim
+# is present through 0.52.1 and gone in 1.0.0.
+starlette<1.0
 fvcore
 cloudpickle
 omegaconf
