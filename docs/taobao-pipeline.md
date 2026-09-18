@@ -86,10 +86,19 @@ check the fit without opening two files.
 
 ## Things that will bite
 
-**The reference photo has text in it.** `model_front.jpg` carries the "CrzYoga"
-logo and a 黄油系列 badge. The brief says *no text in the image*, and an editing
-model imitates what it is shown. Crop them out of the reference; the prompt also
-names text in the negative, but that is a weaker lever than not showing it.
+**Text removal is asked of the model, and is not guaranteed.**
+`model_front.jpg` carries the "CrzYoga" logo and a 黄油系列 badge. The default
+prompt opens with an explicit instruction to remove all text, logos, watermarks
+and corner badges and reconstruct the background behind them — Qwen-Image-Edit
+is an editing model, so this is the kind of thing it is built for, and an
+instruction is a much stronger lever than a negative prompt against something
+visible in the input.
+
+It can still fail, or leave a smudge where the mark was. Stage 10 prints a
+reminder to check, and the brief treats *no text* as a hard requirement, so
+inspect every variant before stage 30. If a particular mark proves stubborn,
+cropping or inpainting it out of the reference first is deterministic where the
+model is not.
 
 **Artifacts compound.** Stage 10 invents a person, stage 30 repaints her
 clothes. Treat stage 10 output as candidates, inspect them, and discard the bad

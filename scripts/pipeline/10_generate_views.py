@@ -17,15 +17,20 @@ from pathlib import Path
 
 DEFAULT_MODEL = "/root/public/models/Qwen/Qwen-Image-Edit-2511"
 
+# This is an editing model, so the prompt is an instruction about the reference,
+# not just a description of the output. Removing source text is stated first and
+# concretely: a reference carrying a brand mark is otherwise imitated, and a
+# negative prompt alone is a weak lever against something visible in the input.
 DEFAULT_PROMPT = (
-    "Taobao product display photograph in the same style as the reference image. "
-    "Full-body shot of a female model, head to feet fully in frame, standing, "
-    "facing the camera, plain seamless studio background, soft even lighting, "
-    "high resolution e-commerce photography. No text, no watermark, no logo."
+    "Remove all text, logos, watermarks, brand names and corner badges from the "
+    "image, reconstructing the background cleanly where they were. "
+    "Then produce a Taobao product display photograph in the same style as the "
+    "reference: full-body shot of a female model, head to feet fully in frame, "
+    "standing, facing the camera, plain seamless studio background, soft even "
+    "lighting, high resolution e-commerce photography. "
+    "The final image must contain no text of any kind."
 )
 
-# "no text in the image" is a requirement, and a reference photo carrying a
-# brand mark will otherwise be imitated - so state it on both sides.
 DEFAULT_NEGATIVE = (
     "text, watermark, logo, brand name, letters, caption, signature, "
     "cropped head, cropped feet, close-up, collage, multiple people, "
@@ -94,6 +99,9 @@ def main():
     print(f"reference {args.reference}")
     print(f"out       {args.out_dir}  ({args.count} variants, seeds "
           f"{args.seed}..{args.seed + args.count - 1})")
+    if "no text" in args.prompt.lower() or "remove all text" in args.prompt.lower():
+        print("text      removal requested in the prompt - CHECK THE OUTPUT, "
+              "generative removal is not guaranteed")
     if args.dry_run:
         print("\nDry run - nothing loaded.")
         return 0
