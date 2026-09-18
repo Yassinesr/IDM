@@ -664,6 +664,8 @@ These are real and will cost you time otherwise:
 
 | File | Purpose |
 |---|---|
+| `docs/taobao-pipeline.md` | the Qwen → leg-mask → try-on pipeline |
+| `scripts/pipeline/*` | that pipeline's three stages |
 | `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
 | `scripts/alaya/check_mount_capability.sh` | can this container mount storage itself? |
 | `scripts/alaya/bundle_for_workshop.sh` | ship the repo over SSH when GitHub is slow (macOS/Linux) |
