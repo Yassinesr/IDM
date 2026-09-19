@@ -72,10 +72,24 @@ QWEN_OVERLAY_PKGS="diffusers>=0.35 transformers>=4.51 tokenizers \
     bash scripts/pipeline/00_setup_qwen_env.sh --overlay
 ```
 
-The trade: Qwen then runs on whatever torch that env has (2.0.1), which is older
-than it expects. If it refuses, that is the answer — the full venv is the clean
-fix once there is disk. Stage 10 prints the torch, diffusers and hub versions it
-actually loaded, so there is no guessing about which took effect.
+**Overlay mode does not work against torch 2.0.1**, which is what the IDM-VTON
+env has. Checked against the published wheels:
+
+| diffusers | has `QwenImageEditPlusPipeline` | touches `torch.xpu` at import |
+|---|---|---|
+| 0.33.1 | no | no |
+| 0.34.0 | no | yes |
+| 0.35.1 | no | yes |
+| 0.36.0 | **yes** | yes |
+
+`Qwen-Image-Edit-2511` declares `QwenImageEditPlusPipeline`, which first ships in
+0.36.0; `torch.xpu` became an import-time reference in 0.34.0 and arrived in
+torch 2.4. No version satisfies both, so this needs a full venv with its own
+torch — roughly 10 GB, and there is no way around that number.
+
+Overlay mode remains useful where the base torch is already 2.4+. Stage 10
+prints the torch, diffusers and hub versions it loaded, and names this specific
+floor when it hits it.
 
 ### The pipeline class
 

@@ -123,11 +123,23 @@ def main():
     try:
         import diffusers
         from diffusers import DiffusionPipeline
-    except ImportError as exc:
+    except (ImportError, AttributeError) as exc:
+        # AttributeError too: modern diffusers touches torch.xpu at import, which
+        # torch < 2.4 does not have, and that is not an ImportError.
         if overlay:
             # Classic overlay symptom: a new library importing a symbol that
             # only exists in a newer version of a package it did NOT shadow.
             print(f"\nERROR: {exc}", file=sys.stderr)
+            if "xpu" in str(exc):
+                print("\n       This is the torch floor, not a missing package.\n"
+                      "       QwenImageEditPlusPipeline needs diffusers >= 0.36, and\n"
+                      "       diffusers >= 0.34 touches torch.xpu at import, which\n"
+                      "       arrived in torch 2.4. The base env has torch 2.0.1, so\n"
+                      "       overlay mode cannot work here - it needs a full venv with\n"
+                      "       its own newer torch:\n"
+                      "         bash scripts/pipeline/00_setup_qwen_env.sh",
+                      file=sys.stderr)
+                return 1
             print("\n       The overlay shadows only the packages it installed; this one\n"
                   "       came from the base env at its older pinned version. Rebuild\n"
                   "       the overlay with it added:\n"
