@@ -106,9 +106,23 @@ def main():
         print("\nDry run - nothing loaded.")
         return 0
 
+    # An overlay is a directory of just the NEW libraries (diffusers,
+    # transformers), installed with `pip install --target`. Put first on
+    # sys.path it shadows the IDM-VTON env's pinned versions while reusing its
+    # torch - a few hundred MB instead of a second ~10 GB torch stack.
+    overlay = os.environ.get("QWEN_OVERLAY")
+    if overlay:
+        if not Path(overlay).is_dir():
+            print(f"ERROR: QWEN_OVERLAY={overlay} is not a directory", file=sys.stderr)
+            return 1
+        sys.path.insert(0, overlay)
+        print(f"overlay   {overlay} (shadowing the env's diffusers/transformers)")
+
     import torch
     from PIL import Image
+    import diffusers
     from diffusers import DiffusionPipeline
+    print(f"          torch {torch.__version__}, diffusers {diffusers.__version__}")
 
     if not torch.cuda.is_available():
         print("ERROR: no CUDA device.", file=sys.stderr)

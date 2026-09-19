@@ -39,7 +39,35 @@ instructions are therefore unnecessary here; they would also need
 `HF_ENDPOINT=https://hf-mirror.com`, since huggingface.co is not reachable from
 the cluster.
 
-What *does* cost disk is the second venv — roughly 10 GB, mostly torch.
+What *does* cost disk is the second venv — roughly 10 GB, mostly torch's
+bundled CUDA libraries.
+
+### When there is no room for a second torch
+
+```bash
+source scripts/alaya/env.sh
+bash scripts/pipeline/00_setup_qwen_env.sh --overlay
+export QWEN_OVERLAY=$IDM_ROOT/qwen-overlay
+python scripts/pipeline/10_generate_views.py --reference ... --count 3
+```
+
+Overlay mode installs *only* the new libraries — diffusers, transformers,
+tokenizers — into a directory stage 10 puts first on `sys.path`. They shadow the
+IDM-VTON env's pinned versions while its torch is reused, so the cost is a few
+hundred MB instead of ~10 GB.
+
+The trade: Qwen then runs on whatever torch that env has (2.0.1), which is older
+than it expects. If it refuses, that is the answer — the full venv is the clean
+fix once there is disk. Stage 10 prints the torch and diffusers versions it
+actually loaded, so there is no guessing about which took effect.
+
+### The pipeline class
+
+`Qwen-Image-Edit-2511`'s `model_index.json` names **`QwenImageEditPlusPipeline`**.
+Running stage 10 in the IDM-VTON env fails with
+`module diffusers has no attribute QwenImageEditPlusPipeline` — that is the
+pinned 0.25.0 diffusers, not a broken model. It is a useful smoke test: if you
+see that error, the wrong environment is active.
 
 ## Running it
 

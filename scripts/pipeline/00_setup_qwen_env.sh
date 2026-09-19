@@ -9,6 +9,13 @@
 
 set -euo pipefail
 
+# --overlay: install ONLY the new libraries into a directory that stage 10 puts
+# first on sys.path, reusing the IDM-VTON env's torch. A few hundred MB rather
+# than a second torch stack, which matters when the disk cannot hold one. The
+# trade is that Qwen then runs on whatever torch that env has.
+MODE=venv
+[ "${1:-}" = "--overlay" ] && MODE=overlay
+
 IDM_ROOT="${IDM_ROOT:-/pvc/idm}"
 QWEN_VENV="$IDM_ROOT/venv-qwen"
 PIP_INDEX_URL="${PIP_INDEX_URL-https://pypi.tuna.tsinghua.edu.cn/simple}"
@@ -17,6 +24,34 @@ TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck disable=SC1091
 source "$REPO_DIR/scripts/alaya/_activate.sh"
+
+if [ "$MODE" = "overlay" ]; then
+    OVERLAY="$IDM_ROOT/qwen-overlay"
+    echo "==> overlay mode: $OVERLAY (reusing the IDM-VTON env's torch)"
+    # shellcheck disable=SC1091
+    source "$REPO_DIR/scripts/alaya/env.sh" >/dev/null 2>&1 || true
+    command -v python >/dev/null 2>&1 \
+        || { echo "ERROR: activate the IDM-VTON env first: source scripts/alaya/env.sh" >&2; exit 1; }
+    echo "    base torch: $(python -c 'import torch;print(torch.__version__)' 2>/dev/null || echo MISSING)"
+    mkdir -p "$OVERLAY"
+    [ -n "$PIP_INDEX_URL" ] && export PIP_INDEX_URL
+    pip install --target "$OVERLAY" --upgrade --no-deps \
+        "diffusers>=0.35" "transformers>=4.51" tokenizers safetensors accelerate
+    echo
+    echo "    $(du -sh "$OVERLAY" | cut -f1) installed"
+    cat <<EOF
+
+Use it by exporting QWEN_OVERLAY - no second env to activate:
+
+    source scripts/alaya/env.sh
+    export QWEN_OVERLAY=$OVERLAY
+    python scripts/pipeline/10_generate_views.py --reference ... --count 3
+
+If Qwen refuses to run on this torch, that is the trade-off of overlay mode;
+the full venv (no --overlay) is the clean answer once there is disk for it.
+EOF
+    exit 0
+fi
 
 echo "==> target: $QWEN_VENV"
 FREE_GB="$(df -BG --output=avail "$IDM_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')"
