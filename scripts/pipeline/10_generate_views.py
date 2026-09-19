@@ -106,9 +106,52 @@ def main():
         print("\nDry run - nothing loaded.")
         return 0
 
+    # An overlay is a directory of just the NEW libraries (diffusers,
+    # transformers), installed with `pip install --target`. Put first on
+    # sys.path it shadows the IDM-VTON env's pinned versions while reusing its
+    # torch - a few hundred MB instead of a second ~10 GB torch stack.
+    overlay = os.environ.get("QWEN_OVERLAY")
+    if overlay:
+        if not Path(overlay).is_dir():
+            print(f"ERROR: QWEN_OVERLAY={overlay} is not a directory", file=sys.stderr)
+            return 1
+        sys.path.insert(0, overlay)
+        print(f"overlay   {overlay} (shadowing the env's diffusers/transformers)")
+
     import torch
     from PIL import Image
-    from diffusers import DiffusionPipeline
+    try:
+        import diffusers
+        from diffusers import DiffusionPipeline
+    except (ImportError, AttributeError) as exc:
+        # AttributeError too: modern diffusers touches torch.xpu at import, which
+        # torch < 2.4 does not have, and that is not an ImportError.
+        if overlay:
+            # Classic overlay symptom: a new library importing a symbol that
+            # only exists in a newer version of a package it did NOT shadow.
+            print(f"\nERROR: {exc}", file=sys.stderr)
+            if "xpu" in str(exc):
+                print("\n       This is the torch floor, not a missing package.\n"
+                      "       QwenImageEditPlusPipeline needs diffusers >= 0.36, and\n"
+                      "       diffusers >= 0.34 touches torch.xpu at import, which\n"
+                      "       arrived in torch 2.4. The base env has torch 2.0.1, so\n"
+                      "       overlay mode cannot work here - it needs a full venv with\n"
+                      "       its own newer torch:\n"
+                      "         bash scripts/pipeline/00_setup_qwen_env.sh",
+                      file=sys.stderr)
+                return 1
+            print("\n       The overlay shadows only the packages it installed; this one\n"
+                  "       came from the base env at its older pinned version. Rebuild\n"
+                  "       the overlay with it added:\n"
+                  '         QWEN_OVERLAY_PKGS="diffusers>=0.35 transformers>=4.51 \\\n'
+                  '             tokenizers huggingface_hub>=0.27 safetensors accelerate" \\\n'
+                  "             bash scripts/pipeline/00_setup_qwen_env.sh --overlay",
+                  file=sys.stderr)
+            return 1
+        raise
+    import huggingface_hub
+    print(f"          torch {torch.__version__}, diffusers {diffusers.__version__}, "
+          f"hub {huggingface_hub.__version__}")
 
     if not torch.cuda.is_available():
         print("ERROR: no CUDA device.", file=sys.stderr)

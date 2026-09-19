@@ -83,6 +83,58 @@ Three things that have caught people out, each covered below:
 
 ---
 
+## Starting a fresh container: settings that matter
+
+### Sizing
+
+| | |
+|---|---|
+| IDM-VTON weights | ~32 GB (~17 GB with `--slim`) |
+| IDM-VTON env | ~5 GB |
+| Qwen env (torch ≥ 2.4) | ~10 GB |
+| repo + `ckpt/` | ~2 GB |
+| outputs, headroom | the rest |
+
+**150 GB is a comfortable PVC; 100 GB works; below 60 GB is a fight.** The Qwen
+model weights themselves cost nothing — they are read from `/root/public`.
+
+The system disk stays ephemeral whatever its size, so **Container Path must
+still be set**. A big system disk is not a substitute for a PVC.
+
+### The ENV panel
+
+Variables set there exist in every shell, including non-interactive ones, which
+removes a whole category of "I forgot to export it" failures:
+
+| Key | Value | Why |
+|---|---|---|
+| `IDM_ROOT` | `/pvc/idm` | every script reads it; the usual cause of a wrong-path run |
+| `HF_ENDPOINT` | `https://hf-mirror.com` | huggingface.co is not routable from the cluster |
+| `PIP_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple` | PyPI direct is slow here |
+
+Do **not** set `IDM_ALLOW_EPHEMERAL` — it exists to let you override the
+"this is not a PVC" guard deliberately, and the guard is the thing that catches
+an unmounted Container Path before a 32 GB download.
+
+### Then one command
+
+```bash
+git clone -b claude/alaya-new-cloud-setup-4ode4d \
+    git@github.com:Yassinesr/IDM.git /pvc/idm/IDM
+cd /pvc/idm/IDM
+bash scripts/alaya/bootstrap_all.sh
+```
+
+Storage check, IDM-VTON env, checkpoints, preflight, Qwen env. Every stage is
+skippable (`--skip-weights` and friends) and re-runnable, so a failure part-way
+means fixing that one thing and running it again.
+
+The clone needs the SSH key set up first — `sync_from_github.sh` (§2.2.2) does
+that, or copy `~/.ssh/id_ed25519` across from the old container before you
+release it.
+
+---
+
 ## 0. Before you start
 
 1. **Accounts.** Log in to the platform, then install the **Aladdin** extension
@@ -369,6 +421,13 @@ wrong default.
 any loose `*.png`/`*.jpg` — so scp'd photos and pipeline outputs survive while
 genuine junk goes. Without `--force` it only prints what it would remove, and
 warns if local commits would be discarded.
+
+Downloaded checkpoints are handled separately, because they need to be:
+`ckpt/*` is **tracked** as placeholders, and `reset --hard` restores tracked
+files regardless of clean excludes. The script moves real checkpoints aside
+before the reset and back afterwards. Without that, a sync silently replaces
+~950 MB of weights with `put X here`, and the next run fails deep inside
+onnxruntime with `INVALID_PROTOBUF` — a long way from the cause.
 
 If port 443 is blocked too, fall back to the bundle route (§2.2.1) — that needs
 no server egress at all.
@@ -666,6 +725,7 @@ These are real and will cost you time otherwise:
 | Hub download hangs / times out | huggingface.co is blocked | `export HF_ENDPOINT=https://hf-mirror.com` (env.sh does it) |
 | Weights re-download after a Workshop restart | `HF_HOME` not on the PVC | `source scripts/alaya/env.sh` before anything |
 | `FileNotFoundError` on a `ckpt/...` path | still the placeholder | `python scripts/alaya/01_download_checkpoints.py` |
+| `INVALID_PROTOBUF` loading `parsing_atr.onnx` | a `git reset --hard` restored the tracked placeholder over the real file | `python scripts/alaya/01_download_checkpoints.py --skip-model` (current sync preserves them) |
 | `RuntimeError: Numpy is not available` | NumPy 2 got pulled in | `pip install "numpy==1.26.4"` |
 | `_ARRAY_API not found` / `numpy.core.multiarray failed to import` | same: NumPy 2 broke modules built against the 1.x ABI | `pip install "numpy==1.26.4"` — and pin it in the *same* command whenever installing anything else |
 | `ImportError: libGL.so.1: cannot open shared object file` | `opencv-python` wants a GUI backend the server image lacks | `pip uninstall -y opencv-python && pip install opencv-python-headless` (now the default in `requirements.txt`) |
@@ -678,6 +738,7 @@ These are real and will cost you time otherwise:
 | `No such file or directory` for a python that is on PATH | the venv was deleted mid-session, PATH and bash's hash still point into it | `source scripts/alaya/env.sh` cleans it, or start a new shell |
 | `no kernel image is available for execution on the device` | cu117 torch on an sm_90 GPU | reinstall from a cu118+ index |
 | `No space left on device` mid-download | Container Path was left blank, so there is no PVC | recreate the Workshop with Storage set (§2.1.1) |
+| Out of disk after a full (non-`--slim`) download | the cache holds both `.bin` and `.safetensors` copies | `python scripts/alaya/prune_hf_cache.py` to size it, then `--force` |
 | Storage volume dropdown is empty ("no data to select") | no NAS volume exists yet | create one in 产品中心 → 存储管理 (§2.1.1) |
 | Demo unreachable in the browser | gradio on 127.0.0.1 | `export GRADIO_SERVER_NAME=0.0.0.0`, forward 7860 in PORTS |
 | gradio: `TypeError: unhashable type: 'dict'` on every request, then `When localhost is not accessible, a shareable link must be created` | starlette 1.x removed the old `TemplateResponse` signature gradio 4.24.0 uses | `pip install -r requirements.txt` — it now pins `starlette<1.0` |
@@ -694,6 +755,8 @@ These are real and will cost you time otherwise:
 |---|---|
 | `docs/taobao-pipeline.md` | the Qwen → leg-mask → try-on pipeline |
 | `scripts/pipeline/*` | that pipeline's three stages |
+| `scripts/alaya/prune_hf_cache.py` | reclaim disk: drop `.bin` weights that have a `.safetensors` twin |
+| `scripts/alaya/bootstrap_all.sh` | fresh container → both pipelines, one command |
 | `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
 | `scripts/alaya/check_mount_capability.sh` | can this container mount storage itself? |
 | `scripts/alaya/sync_from_github.sh` | pull on the server over SSH on port 443, when HTTPS is blocked |
