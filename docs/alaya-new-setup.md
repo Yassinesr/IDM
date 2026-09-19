@@ -678,6 +678,7 @@ These are real and will cost you time otherwise:
 | `No such file or directory` for a python that is on PATH | the venv was deleted mid-session, PATH and bash's hash still point into it | `source scripts/alaya/env.sh` cleans it, or start a new shell |
 | `no kernel image is available for execution on the device` | cu117 torch on an sm_90 GPU | reinstall from a cu118+ index |
 | `No space left on device` mid-download | Container Path was left blank, so there is no PVC | recreate the Workshop with Storage set (§2.1.1) |
+| Out of disk after a full (non-`--slim`) download | the cache holds both `.bin` and `.safetensors` copies | `python scripts/alaya/prune_hf_cache.py` to size it, then `--force` |
 | Storage volume dropdown is empty ("no data to select") | no NAS volume exists yet | create one in 产品中心 → 存储管理 (§2.1.1) |
 | Demo unreachable in the browser | gradio on 127.0.0.1 | `export GRADIO_SERVER_NAME=0.0.0.0`, forward 7860 in PORTS |
 | gradio: `TypeError: unhashable type: 'dict'` on every request, then `When localhost is not accessible, a shareable link must be created` | starlette 1.x removed the old `TemplateResponse` signature gradio 4.24.0 uses | `pip install -r requirements.txt` — it now pins `starlette<1.0` |
@@ -694,6 +695,7 @@ These are real and will cost you time otherwise:
 |---|---|
 | `docs/taobao-pipeline.md` | the Qwen → leg-mask → try-on pipeline |
 | `scripts/pipeline/*` | that pipeline's three stages |
+| `scripts/alaya/prune_hf_cache.py` | reclaim disk: drop `.bin` weights that have a `.safetensors` twin |
 | `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
 | `scripts/alaya/check_mount_capability.sh` | can this container mount storage itself? |
 | `scripts/alaya/sync_from_github.sh` | pull on the server over SSH on port 443, when HTTPS is blocked |
