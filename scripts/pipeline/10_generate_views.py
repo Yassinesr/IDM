@@ -120,9 +120,26 @@ def main():
 
     import torch
     from PIL import Image
-    import diffusers
-    from diffusers import DiffusionPipeline
-    print(f"          torch {torch.__version__}, diffusers {diffusers.__version__}")
+    try:
+        import diffusers
+        from diffusers import DiffusionPipeline
+    except ImportError as exc:
+        if overlay:
+            # Classic overlay symptom: a new library importing a symbol that
+            # only exists in a newer version of a package it did NOT shadow.
+            print(f"\nERROR: {exc}", file=sys.stderr)
+            print("\n       The overlay shadows only the packages it installed; this one\n"
+                  "       came from the base env at its older pinned version. Rebuild\n"
+                  "       the overlay with it added:\n"
+                  '         QWEN_OVERLAY_PKGS="diffusers>=0.35 transformers>=4.51 \\\n'
+                  '             tokenizers huggingface_hub>=0.27 safetensors accelerate" \\\n'
+                  "             bash scripts/pipeline/00_setup_qwen_env.sh --overlay",
+                  file=sys.stderr)
+            return 1
+        raise
+    import huggingface_hub
+    print(f"          torch {torch.__version__}, diffusers {diffusers.__version__}, "
+          f"hub {huggingface_hub.__version__}")
 
     if not torch.cuda.is_available():
         print("ERROR: no CUDA device.", file=sys.stderr)

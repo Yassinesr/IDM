@@ -56,9 +56,25 @@ tokenizers — into a directory stage 10 puts first on `sys.path`. They shadow t
 IDM-VTON env's pinned versions while its torch is reused, so the cost is a few
 hundred MB instead of ~10 GB.
 
+The install uses `--no-deps` on purpose: resolving normally would drag torch in
+and undo the point. So **every package that must be newer than the IDM-VTON
+env's copy has to be named explicitly**. `huggingface_hub` is one — the env pins
+0.25.2 for diffusers 0.25.0, while modern diffusers needs `DDUFEntry`, added in
+0.27. Overriding it is safe precisely because the overlay is only on `sys.path`
+when `QWEN_OVERLAY` is set: stages 20 and 30 still see 0.25.2.
+
+If an import fails naming a symbol the older copy lacks, add that package and
+rebuild:
+
+```bash
+QWEN_OVERLAY_PKGS="diffusers>=0.35 transformers>=4.51 tokenizers \
+    huggingface_hub>=0.27 safetensors accelerate <the-missing-one>" \
+    bash scripts/pipeline/00_setup_qwen_env.sh --overlay
+```
+
 The trade: Qwen then runs on whatever torch that env has (2.0.1), which is older
 than it expects. If it refuses, that is the answer — the full venv is the clean
-fix once there is disk. Stage 10 prints the torch and diffusers versions it
+fix once there is disk. Stage 10 prints the torch, diffusers and hub versions it
 actually loaded, so there is no guessing about which took effect.
 
 ### The pipeline class

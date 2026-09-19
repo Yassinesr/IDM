@@ -35,8 +35,16 @@ if [ "$MODE" = "overlay" ]; then
     echo "    base torch: $(python -c 'import torch;print(torch.__version__)' 2>/dev/null || echo MISSING)"
     mkdir -p "$OVERLAY"
     [ -n "$PIP_INDEX_URL" ] && export PIP_INDEX_URL
-    pip install --target "$OVERLAY" --upgrade --no-deps \
-        "diffusers>=0.35" "transformers>=4.51" tokenizers safetensors accelerate
+    # --no-deps deliberately: resolving normally would drag in torch and undo
+    # the entire point. That means every package whose version must be NEWER
+    # than the IDM-VTON env's has to be named here. huggingface_hub is one:
+    # the env pins 0.25.2 for diffusers 0.25.0, and modern diffusers needs
+    # DDUFEntry, added in 0.27. Overriding it is safe because the overlay is
+    # only on sys.path when QWEN_OVERLAY is set - stages 20 and 30 still see
+    # the pinned 0.25.2.
+    PKGS="${QWEN_OVERLAY_PKGS:-diffusers>=0.35 transformers>=4.51 tokenizers huggingface_hub>=0.27 safetensors accelerate}"
+    # shellcheck disable=SC2086
+    pip install --target "$OVERLAY" --upgrade --no-deps $PKGS
     echo
     echo "    $(du -sh "$OVERLAY" | cut -f1) installed"
     cat <<EOF
@@ -46,6 +54,13 @@ Use it by exporting QWEN_OVERLAY - no second env to activate:
     source scripts/alaya/env.sh
     export QWEN_OVERLAY=$OVERLAY
     python scripts/pipeline/10_generate_views.py --reference ... --count 3
+
+If an import fails naming a symbol the base env's older copy lacks, that
+package needs adding to the overlay too:
+
+    QWEN_OVERLAY_PKGS="diffusers>=0.35 transformers>=4.51 tokenizers \
+        huggingface_hub>=0.27 safetensors accelerate <the-missing-one>" \
+        bash scripts/pipeline/00_setup_qwen_env.sh --overlay
 
 If Qwen refuses to run on this torch, that is the trade-off of overlay mode;
 the full venv (no --overlay) is the clean answer once there is disk for it.
