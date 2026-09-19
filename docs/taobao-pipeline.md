@@ -99,6 +99,51 @@ Running stage 10 in the IDM-VTON env fails with
 pinned 0.25.0 diffusers, not a broken model. It is a useful smoke test: if you
 see that error, the wrong environment is active.
 
+## When no PVC is available: one container per stage
+
+Every instance type offers exactly 50 GB of system disk, and if NAS storage
+cannot be activated there is no larger option. Both stacks do not fit together:
+
+| | A: stage 10 (Qwen) | B: stages 20/30 (IDM-VTON) | both together |
+|---|---|---|---|
+| base image | 3.5 | 3.5 | 3.5 |
+| venv-qwen | 10 | — | 10 |
+| venv (IDM-VTON) | — | 5 | 5 |
+| weights | 0 (read from `/root/public`) | 32 | 32 |
+| repo + `ckpt/` | 2 | 2 | 2 |
+| **total of 49 GB** | **15.6 ✓** | **43.5 ✓** | **52.5 ✗** |
+
+Separately they both fit. That is workable here because the stages already hand
+off through files rather than sharing a process — the split costs a file copy,
+not a redesign.
+
+```bash
+# A: generate, then copy the variants out (a few MB of PNGs)
+bash scripts/pipeline/00_setup_qwen_env.sh
+python scripts/pipeline/10_generate_views.py --reference ... --count 8
+# from your laptop:
+scp -r qwen-box:/root/idm/IDM/work/variants ./variants
+scp -r ./variants idm-box:/root/idm/IDM/work/
+
+# B: masks and try-on
+python scripts/pipeline/20_leg_masks.py --in-dir work/variants
+python scripts/pipeline/30_tryon_batch.py --in-dir work/variants --garment ... --desc ...
+```
+
+Container B has ~5 GB of headroom, so on it:
+
+- set `IDM_ALLOW_EPHEMERAL=1` — no PVC means `IDM_ROOT` is on the container
+  disk, and this is now a deliberate choice rather than the accident the guard
+  exists to catch. It also disables the pip cache, which is dead weight here.
+- **shut down (关机), never release (释放).** A graceful stop saves the image and
+  keeps the 32 GB download; a release costs it.
+- run `git gc` occasionally — `.git` reached 4 GB on the last container.
+
+Keep pressing for storage in parallel. The platform banner mentions
+*大容量存储和NAS型存储* — two separate products, so if NAS cannot be activated,
+高容量 storage may still be available, and activation is usually an account
+permission rather than a technical limit.
+
 ## Running it
 
 ```bash
