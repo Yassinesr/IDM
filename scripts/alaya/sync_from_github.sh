@@ -4,6 +4,8 @@
 #
 #   bash scripts/alaya/sync_from_github.sh            # set up + fetch + show plan
 #   bash scripts/alaya/sync_from_github.sh --force    # actually reset and clean
+#   bash scripts/alaya/sync_from_github.sh --force --assets   # also restore the
+#                                                    example photos from main
 #
 # HTTPS to github.com is blocked from Beijing, and so is SSH on port 22. GitHub
 # also serves SSH on port 443, which normally survives - that is what this
@@ -14,7 +16,13 @@ set -euo pipefail
 REPO_URL_SSH="${REPO_URL_SSH:-git@github.com:Yassinesr/IDM.git}"
 BRANCH="${BRANCH:-claude/alaya-new-cloud-setup-4ode4d}"
 FORCE=0
-[ "${1:-}" = "--force" ] && FORCE=1
+ASSETS=0
+for a in "$@"; do
+    case "$a" in
+        --force)  FORCE=1 ;;
+        --assets) ASSETS=1 ;;
+    esac
+done
 
 # Untracked things a reset must not destroy: pipeline outputs, and any images
 # copied straight to the server that were never committed on this branch.
@@ -124,3 +132,19 @@ git reset --hard "origin/$BRANCH"
 git clean -f "${CLEAN_ARGS[@]}"
 
 echo "==> now at $(git rev-parse --short HEAD) $(git log -1 --format=%s | cut -c1-60)"
+
+# ---------------------------------------------------------------- assets ----
+# Test photos live on main while the code lives on this branch, so a reset to
+# the branch leaves the examples missing. Copy them out of origin/main WITHOUT
+# staging them - git show, not git checkout - so they stay untracked here and
+# the clean excludes above keep protecting them.
+if [ "$ASSETS" = "1" ]; then
+    echo "==> restoring gradio_demo/example/ from origin/main"
+    n=0
+    while read -r f; do
+        [ -n "$f" ] || continue
+        mkdir -p "$(dirname "$f")"
+        git show "origin/main:$f" > "$f" && n=$((n+1))
+    done < <(git ls-tree -r --name-only origin/main -- gradio_demo/example)
+    echo "    $n file(s)"
+fi
