@@ -63,9 +63,32 @@ def main():
         return 1
     print(f"cache {hub}\n")
 
+    # Interrupted downloads leave .incomplete files, and a blob whose snapshot
+    # symlink was removed is unreachable - neither is ever read again, and both
+    # are common after a download that had to be retried.
+    incomplete, orphans = [], []
+    referenced = set()
+    for link in hub.glob("*/snapshots/*/**/*"):
+        if link.is_symlink():
+            referenced.add(os.path.realpath(link))
+    for blobdir in hub.glob("*/blobs"):
+        for b in blobdir.iterdir():
+            if not b.is_file():
+                continue
+            if b.name.endswith(".incomplete"):
+                incomplete.append((b, b.stat().st_size))
+            elif str(b.resolve()) not in referenced:
+                orphans.append((b, b.stat().st_size))
+
+    for label, items in (("partial downloads (.incomplete)", incomplete),
+                         ("orphaned blobs (nothing links to them)", orphans)):
+        if items:
+            tot = sum(sz for _, sz in items)
+            print(f"  {tot / 2**30:7.2f} GB  {label} - {len(items)} file(s)")
+
     dupes = find_duplicates(hub)
-    if not dupes:
-        print("Nothing to prune - no .bin/.pth with a .safetensors twin.")
+    if not dupes and not incomplete and not orphans:
+        print("Nothing to prune.")
         return 0
 
     # A blob can be referenced from several revisions; only drop it when every
@@ -94,6 +117,13 @@ def main():
         return 0
 
     freed = 0
+    for b, size in incomplete + orphans:
+        try:
+            b.unlink()
+            freed += size
+        except OSError as exc:
+            print(f"  could not remove {b.name}: {exc}", file=sys.stderr)
+
     for link, blob, size in dupes:
         if refs[str(blob)] > 1:
             continue
