@@ -422,6 +422,13 @@ any loose `*.png`/`*.jpg` — so scp'd photos and pipeline outputs survive while
 genuine junk goes. Without `--force` it only prints what it would remove, and
 warns if local commits would be discarded.
 
+Downloaded checkpoints are handled separately, because they need to be:
+`ckpt/*` is **tracked** as placeholders, and `reset --hard` restores tracked
+files regardless of clean excludes. The script moves real checkpoints aside
+before the reset and back afterwards. Without that, a sync silently replaces
+~950 MB of weights with `put X here`, and the next run fails deep inside
+onnxruntime with `INVALID_PROTOBUF` — a long way from the cause.
+
 If port 443 is blocked too, fall back to the bundle route (§2.2.1) — that needs
 no server egress at all.
 
@@ -718,6 +725,7 @@ These are real and will cost you time otherwise:
 | Hub download hangs / times out | huggingface.co is blocked | `export HF_ENDPOINT=https://hf-mirror.com` (env.sh does it) |
 | Weights re-download after a Workshop restart | `HF_HOME` not on the PVC | `source scripts/alaya/env.sh` before anything |
 | `FileNotFoundError` on a `ckpt/...` path | still the placeholder | `python scripts/alaya/01_download_checkpoints.py` |
+| `INVALID_PROTOBUF` loading `parsing_atr.onnx` | a `git reset --hard` restored the tracked placeholder over the real file | `python scripts/alaya/01_download_checkpoints.py --skip-model` (current sync preserves them) |
 | `RuntimeError: Numpy is not available` | NumPy 2 got pulled in | `pip install "numpy==1.26.4"` |
 | `_ARRAY_API not found` / `numpy.core.multiarray failed to import` | same: NumPy 2 broke modules built against the 1.x ABI | `pip install "numpy==1.26.4"` — and pin it in the *same* command whenever installing anything else |
 | `ImportError: libGL.so.1: cannot open shared object file` | `opencv-python` wants a GUI backend the server image lacks | `pip uninstall -y opencv-python && pip install opencv-python-headless` (now the default in `requirements.txt`) |

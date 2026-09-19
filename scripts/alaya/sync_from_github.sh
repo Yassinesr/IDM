@@ -125,11 +125,42 @@ EOF
     exit 0
 fi
 
+# git reset --hard restores TRACKED files, and ckpt/* are tracked as tiny
+# placeholders ("put X here"). The clean excludes only protect UNTRACKED files,
+# so without this a sync silently replaces ~950 MB of downloaded checkpoints
+# with placeholders and the next run dies inside onnxruntime with
+# "INVALID_PROTOBUF". Move the real ones aside and put them back afterwards.
+CKPT_STASH="$(mktemp -d)"
+restore_ckpts() {
+    [ -d "$CKPT_STASH/ckpt" ] || { rm -rf "$CKPT_STASH"; return 0; }
+    ( cd "$CKPT_STASH" && find ckpt -type f -print0 ) \
+        | while IFS= read -r -d "" f; do
+              mkdir -p "$(dirname "$f")"
+              mv -f "$CKPT_STASH/$f" "$f"
+          done
+    rm -rf "$CKPT_STASH"
+}
+trap restore_ckpts EXIT
+
+N=0
+while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    [ "$(stat -c%s "$f" 2>/dev/null || echo 0)" -gt 4096 ] || continue
+    mkdir -p "$CKPT_STASH/$(dirname "$f")"
+    mv "$f" "$CKPT_STASH/$f"
+    N=$((N+1))
+done < <(git ls-files ckpt)
+[ "$N" -gt 0 ] && echo "==> holding $N real checkpoint(s) aside across the reset"
+
 echo
 echo "==> resetting to origin/$BRANCH"
 git checkout -B "$BRANCH" "origin/$BRANCH"
 git reset --hard "origin/$BRANCH"
 git clean -f "${CLEAN_ARGS[@]}"
+
+restore_ckpts
+trap - EXIT
+[ "$N" -gt 0 ] && echo "==> restored $N checkpoint(s) over the placeholders"
 
 echo "==> now at $(git rev-parse --short HEAD) $(git log -1 --format=%s | cut -c1-60)"
 
