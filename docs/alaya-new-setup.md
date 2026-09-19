@@ -83,6 +83,58 @@ Three things that have caught people out, each covered below:
 
 ---
 
+## Starting a fresh container: settings that matter
+
+### Sizing
+
+| | |
+|---|---|
+| IDM-VTON weights | ~32 GB (~17 GB with `--slim`) |
+| IDM-VTON env | ~5 GB |
+| Qwen env (torch ≥ 2.4) | ~10 GB |
+| repo + `ckpt/` | ~2 GB |
+| outputs, headroom | the rest |
+
+**150 GB is a comfortable PVC; 100 GB works; below 60 GB is a fight.** The Qwen
+model weights themselves cost nothing — they are read from `/root/public`.
+
+The system disk stays ephemeral whatever its size, so **Container Path must
+still be set**. A big system disk is not a substitute for a PVC.
+
+### The ENV panel
+
+Variables set there exist in every shell, including non-interactive ones, which
+removes a whole category of "I forgot to export it" failures:
+
+| Key | Value | Why |
+|---|---|---|
+| `IDM_ROOT` | `/pvc/idm` | every script reads it; the usual cause of a wrong-path run |
+| `HF_ENDPOINT` | `https://hf-mirror.com` | huggingface.co is not routable from the cluster |
+| `PIP_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple` | PyPI direct is slow here |
+
+Do **not** set `IDM_ALLOW_EPHEMERAL` — it exists to let you override the
+"this is not a PVC" guard deliberately, and the guard is the thing that catches
+an unmounted Container Path before a 32 GB download.
+
+### Then one command
+
+```bash
+git clone -b claude/alaya-new-cloud-setup-4ode4d \
+    git@github.com:Yassinesr/IDM.git /pvc/idm/IDM
+cd /pvc/idm/IDM
+bash scripts/alaya/bootstrap_all.sh
+```
+
+Storage check, IDM-VTON env, checkpoints, preflight, Qwen env. Every stage is
+skippable (`--skip-weights` and friends) and re-runnable, so a failure part-way
+means fixing that one thing and running it again.
+
+The clone needs the SSH key set up first — `sync_from_github.sh` (§2.2.2) does
+that, or copy `~/.ssh/id_ed25519` across from the old container before you
+release it.
+
+---
+
 ## 0. Before you start
 
 1. **Accounts.** Log in to the platform, then install the **Aladdin** extension
@@ -696,6 +748,7 @@ These are real and will cost you time otherwise:
 | `docs/taobao-pipeline.md` | the Qwen → leg-mask → try-on pipeline |
 | `scripts/pipeline/*` | that pipeline's three stages |
 | `scripts/alaya/prune_hf_cache.py` | reclaim disk: drop `.bin` weights that have a `.safetensors` twin |
+| `scripts/alaya/bootstrap_all.sh` | fresh container → both pipelines, one command |
 | `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
 | `scripts/alaya/check_mount_capability.sh` | can this container mount storage itself? |
 | `scripts/alaya/sync_from_github.sh` | pull on the server over SSH on port 443, when HTTPS is blocked |
