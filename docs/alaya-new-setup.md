@@ -345,6 +345,34 @@ grep -c dry-run scripts/alaya/01_download_checkpoints.py   # 0 means stale
 `Compress-Archive -Path IDM` normally does include `.git`, but
 `Compress-Archive -Path IDM\*` does not — the wildcard skips hidden entries.
 
+### 2.2.2 Pulling updates when HTTPS to GitHub is blocked
+
+Beijing egress blocks HTTPS to github.com, and usually SSH on port 22 as well.
+GitHub also serves SSH on **port 443**, which normally survives:
+
+```bash
+bash scripts/alaya/sync_from_github.sh            # set up, fetch, show the plan
+bash scripts/alaya/sync_from_github.sh --force    # apply it
+```
+
+First run generates an ed25519 key, prints the public half and stops — add it to
+GitHub (account key, or a repo deploy key if you want it scoped) and run it
+again. After that it is one command per update.
+
+It verifies GitHub's host key against the published ed25519 fingerprint rather
+than trusting whatever answers, and refuses to continue on a mismatch. On a
+network that interferes with traffic by design, blind trust-on-first-use is the
+wrong default.
+
+**The reset will not eat your data.** `--force` does `reset --hard` plus
+`git clean`, but excludes `work/`, `out/`, `results/`, `variants/`, `masks/` and
+any loose `*.png`/`*.jpg` — so scp'd photos and pipeline outputs survive while
+genuine junk goes. Without `--force` it only prints what it would remove, and
+warns if local commits would be discarded.
+
+If port 443 is blocked too, fall back to the bundle route (§2.2.1) — that needs
+no server egress at all.
+
 ### 2.3 Every session after that
 
 A new Workshop terminal starts with none of this set, so:
@@ -668,6 +696,7 @@ These are real and will cost you time otherwise:
 | `scripts/pipeline/*` | that pipeline's three stages |
 | `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
 | `scripts/alaya/check_mount_capability.sh` | can this container mount storage itself? |
+| `scripts/alaya/sync_from_github.sh` | pull on the server over SSH on port 443, when HTTPS is blocked |
 | `scripts/alaya/bundle_for_workshop.sh` | ship the repo over SSH when GitHub is slow (macOS/Linux) |
 | `scripts/alaya/sync_from_windows.ps1` | same, from PowerShell |
 | `scripts/alaya/env.sh` | per-session env: PVC paths, caches, HF mirror |
