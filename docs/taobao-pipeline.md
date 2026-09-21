@@ -1,18 +1,22 @@
 # Generating Taobao display images: reference photo → views → leg masks → try-on
 
+> For the commands in order, start to finish, see
+> [`runbook.md`](runbook.md). This document explains why the stages are shaped
+> the way they are.
+
 Three stages, each writing files the next one reads.
 
 ```
 model_front.jpg
    │  stage 10   Qwen-Image-Edit-2511            [venv-qwen]
    ▼
-work/variants/variant_NN.png          N synthetic full-body views
+work/variants/NN_<pose>.png           one full-body view per pose
    │  stage 20   human parsing + ankle clip      [IDM-VTON venv]
    ▼
-work/masks/variant_NN.mask.png        white = leg area, black = rest   ← deliverable
+work/masks/NN_<pose>.mask.png         white = leg area, black = rest   ← deliverable
    │  stage 30   IDM-VTON try-on                 [IDM-VTON venv]
    ▼
-work/results/variant_NN.tryon.png     the garment on every view
+work/results/NN_<pose>.tryon.png      the garment on every view
 ```
 
 ## Why two environments
@@ -39,8 +43,8 @@ instructions are therefore unnecessary here; they would also need
 `HF_ENDPOINT=https://hf-mirror.com`, since huggingface.co is not reachable from
 the cluster.
 
-What *does* cost disk is the second venv — roughly 10 GB, mostly torch's
-bundled CUDA libraries.
+What *does* cost disk is the second venv — roughly 8 GB, mostly torch's
+bundled CUDA libraries. See "When no PVC is available" below for how to fit it.
 
 ### When there is no room for a second torch
 
@@ -99,27 +103,114 @@ Running stage 10 in the IDM-VTON env fails with
 pinned 0.25.0 diffusers, not a broken model. It is a useful smoke test: if you
 see that error, the wrong environment is active.
 
-## When no PVC is available: one container per stage
+## Getting different views, not the same view N times
 
-Every instance type offers exactly 50 GB of system disk, and if NAS storage
-cannot be activated there is no larger option. Both stacks do not fit together:
+Qwen-Image-Edit is an *editing* model: it is conditioned on the reference and
+reproduces it unless told to do otherwise. Running it N times with N seeds and
+one prompt therefore gives N nearly identical images — the seed only moves the
+regions the model is least certain about, which in practice means the hands.
 
-| | A: stage 10 (Qwen) | B: stages 20/30 (IDM-VTON) | both together |
-|---|---|---|---|
-| base image | 3.5 | 3.5 | 3.5 |
-| venv-qwen | 10 | — | 10 |
-| venv (IDM-VTON) | — | 5 | 5 |
-| weights | 0 (read from `/root/public`) | 32 | 32 |
-| repo + `ckpt/` | 2 | 2 | 2 |
-| **total of 49 GB** | **15.6 ✓** | **43.5 ✓** | **52.5 ✗** |
-
-Separately they both fit. That is workable here because the stages already hand
-off through files rather than sharing a process — the split costs a file copy,
-not a redesign.
+So the pose is a prompt, not a seed. `10_generate_views.py` carries a table of
+pose instructions and renders one image per pose:
 
 ```bash
-# A: generate, then copy the variants out (a few MB of PNGs)
+python scripts/pipeline/10_generate_views.py --list-poses
+python scripts/pipeline/10_generate_views.py --reference <photo> --count 4
+python scripts/pipeline/10_generate_views.py --reference <photo> \
+    --poses front,three_quarter_left,three_quarter_right,walking
+python scripts/pipeline/10_generate_views.py --reference <photo> --poses all
+```
+
+`--dry-run` prints the exact filenames and the full prompt for the first pose
+without loading the 54 GB of weights — worth doing before a long batch.
+
+`--repeat K` gives K seeds per pose, for variation *within* a pose. `--prompt`
+still overrides the whole table with one text, which is the old behaviour and
+will produce near-identical images; the script says so when you use it.
+
+Every pose keeps the legs visible and the feet in frame, because stage 20 masks
+the leg region from the human parse and cuts at the ankles OpenPose finds —
+neither survives a crop that loses them.
+
+Four of the poses (`profile_left`, `profile_right`, `back`, `back_over_shoulder`)
+are marked off-front. They generate fine and are useful for judging a garment,
+but IDM-VTON is trained on front-facing shots and its warping module has no real
+supervision for a garment seen edge-on or from behind, so stage 30 will degrade
+on them. The script warns when you select one.
+
+## When no PVC is available: one container per stage
+
+Every instance type offers exactly 50 GB of system disk (49 GB usable), and if
+NAS storage cannot be activated there is no larger option. Measured on a box
+with IDM-VTON already working:
+
+| | measured | note |
+|---|---|---|
+| `hf/` | 31 GB | the weights — a re-download over a throttled link |
+| `venv/` | 5.2 GB | IDM-VTON: torch 2.0.1 + CUDA libs |
+| `IDM/` | 1.9 GB | checkout, of which `.git` is 931 MB |
+| `miniconda/` | 1.3 GB | |
+| base image, caches | ~3.6 GB | outside `IDM_ROOT` — `du` on it alone misses this |
+| **used** | **43 GB** | leaving 5.9 GB free |
+| `venv-qwen/` | ~8 GB | torch ≥ 2.4 + CUDA libs; **does not fit** |
+
+The Qwen *weights* cost nothing — they are read in place off `/root/public`.
+The second **venv** is what does not fit, because IDM-VTON pins
+`diffusers==0.25.0` on torch 2.0.1 while `QwenImageEditPlusPipeline` needs
+diffusers ≥ 0.36, which touches `torch.xpu` at import and so needs torch ≥ 2.4.
+Two irreconcilable torches, ~8 GB for the second.
+
+### Option 1: one container, swap the envs
+
+The stages never run at the same time — stage 10 writes PNGs that stages 20 and
+30 read — so the two envs never have to coexist. Only the 31 GB of weights is
+expensive; a venv rebuilds from `requirements.txt` against a local mirror in
+minutes.
+
+```bash
+bash scripts/alaya/reclaim_disk.sh          # report; --yes to delete
+```
+
+That reports pip's wheel cache, conda's package tarballs, apt lists and loose
+git objects, and refuses to touch the weights or the venvs. If it clears ~8 GB,
+build `venv-qwen` normally and keep both. If it falls short, swap:
+
+```bash
+$IDM_ROOT/venv/bin/pip freeze > $IDM_ROOT/idm-venv.txt   # record it first
+rm -rf $IDM_ROOT/venv
 bash scripts/pipeline/00_setup_qwen_env.sh
+source $IDM_ROOT/venv-qwen/bin/activate
+python scripts/pipeline/10_generate_views.py --reference ... --count 8
+
+rm -rf $IDM_ROOT/venv-qwen                  # stage 10 is done
+bash scripts/alaya/00_bootstrap_workshop.sh # rebuilds venv/ from requirements
+```
+
+Generate a batch of views at a time and this swap happens rarely. The risk is
+that the IDM-VTON rebuild fails on a mirror hiccup and a working setup is down
+until it is retried — which is why `pip freeze` goes first.
+
+### Option 2: one container per stage
+
+Costs money and a file copy, but never touches the working try-on box.
+
+| | A: stage 10 (Qwen) | B: stages 20/30 (IDM-VTON) |
+|---|---|---|
+| base image | 3.6 | 3.6 |
+| venv-qwen | 8 | — |
+| venv (IDM-VTON) | — | 5.2 |
+| weights | 0 (read from `/root/public`) | 31 |
+| repo + `ckpt/` + conda | 3 | 3 |
+| **of 49 GB** | **~15 ✓** | **~43 ✓** |
+
+Separately they both fit. That is workable because the stages already hand off
+through files rather than sharing a process — the split costs a file copy, not
+a redesign.
+
+```bash
+# A: build (Qwen env only - no IDM-VTON, no weights), generate, copy out
+bash scripts/alaya/bootstrap_all.sh --qwen-only
+source $IDM_ROOT/venv-qwen/bin/activate
 python scripts/pipeline/10_generate_views.py --reference ... --count 8
 # from your laptop:
 scp -r qwen-box:/root/idm/IDM/work/variants ./variants
@@ -137,7 +228,8 @@ Container B has ~5 GB of headroom, so on it:
   exists to catch. It also disables the pip cache, which is dead weight here.
 - **shut down (关机), never release (释放).** A graceful stop saves the image and
   keeps the 32 GB download; a release costs it.
-- run `git gc` occasionally — `.git` reached 4 GB on the last container.
+- run `bash scripts/alaya/reclaim_disk.sh` when space gets tight; it
+  distinguishes cache from the things that are costly to replace.
 
 Keep pressing for storage in parallel. The platform banner mentions
 *大容量存储和NAS型存储* — two separate products, so if NAS cannot be activated,

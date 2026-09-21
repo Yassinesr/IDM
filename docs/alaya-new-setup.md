@@ -3,6 +3,9 @@
 Adapted from the platform manual *九章智算云平台使用手册*, with the parts that are
 specific to this repository filled in.
 
+> For the commands in order, start to finish, see
+> [`runbook.md`](runbook.md). This document explains the platform behind them.
+
 The platform gives you a **Workshop**: a GPU pod on an elastic container cluster
 that you attach to as a VS Code Remote window through the **Aladdin** extension.
 Two ways to get an environment into it:
