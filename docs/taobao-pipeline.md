@@ -1,5 +1,9 @@
 # Generating Taobao display images: reference photo → views → leg masks → try-on
 
+> For the commands in order, start to finish, see
+> [`runbook.md`](runbook.md). This document explains why the stages are shaped
+> the way they are.
+
 Three stages, each writing files the next one reads.
 
 ```
