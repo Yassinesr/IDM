@@ -6,13 +6,13 @@ Three stages, each writing files the next one reads.
 model_front.jpg
    │  stage 10   Qwen-Image-Edit-2511            [venv-qwen]
    ▼
-work/variants/variant_NN.png          N synthetic full-body views
+work/variants/NN_<pose>.png           one full-body view per pose
    │  stage 20   human parsing + ankle clip      [IDM-VTON venv]
    ▼
-work/masks/variant_NN.mask.png        white = leg area, black = rest   ← deliverable
+work/masks/NN_<pose>.mask.png         white = leg area, black = rest   ← deliverable
    │  stage 30   IDM-VTON try-on                 [IDM-VTON venv]
    ▼
-work/results/variant_NN.tryon.png     the garment on every view
+work/results/NN_<pose>.tryon.png      the garment on every view
 ```
 
 ## Why two environments
@@ -98,6 +98,41 @@ Running stage 10 in the IDM-VTON env fails with
 `module diffusers has no attribute QwenImageEditPlusPipeline` — that is the
 pinned 0.25.0 diffusers, not a broken model. It is a useful smoke test: if you
 see that error, the wrong environment is active.
+
+## Getting different views, not the same view N times
+
+Qwen-Image-Edit is an *editing* model: it is conditioned on the reference and
+reproduces it unless told to do otherwise. Running it N times with N seeds and
+one prompt therefore gives N nearly identical images — the seed only moves the
+regions the model is least certain about, which in practice means the hands.
+
+So the pose is a prompt, not a seed. `10_generate_views.py` carries a table of
+pose instructions and renders one image per pose:
+
+```bash
+python scripts/pipeline/10_generate_views.py --list-poses
+python scripts/pipeline/10_generate_views.py --reference <photo> --count 4
+python scripts/pipeline/10_generate_views.py --reference <photo> \
+    --poses front,three_quarter_left,three_quarter_right,walking
+python scripts/pipeline/10_generate_views.py --reference <photo> --poses all
+```
+
+`--dry-run` prints the exact filenames and the full prompt for the first pose
+without loading the 54 GB of weights — worth doing before a long batch.
+
+`--repeat K` gives K seeds per pose, for variation *within* a pose. `--prompt`
+still overrides the whole table with one text, which is the old behaviour and
+will produce near-identical images; the script says so when you use it.
+
+Every pose keeps the legs visible and the feet in frame, because stage 20 masks
+the leg region from the human parse and cuts at the ankles OpenPose finds —
+neither survives a crop that loses them.
+
+Four of the poses (`profile_left`, `profile_right`, `back`, `back_over_shoulder`)
+are marked off-front. They generate fine and are useful for judging a garment,
+but IDM-VTON is trained on front-facing shots and its warping module has no real
+supervision for a garment seen edge-on or from behind, so stage 30 will degrade
+on them. The script warns when you select one.
 
 ## When no PVC is available: one container per stage
 
