@@ -17,7 +17,12 @@ MODE=venv
 [ "${1:-}" = "--overlay" ] && MODE=overlay
 
 IDM_ROOT="${IDM_ROOT:-/pvc/idm}"
-QWEN_VENV="$IDM_ROOT/venv-qwen"
+# Overridable so this env can live on a different filesystem from IDM_ROOT.
+# On a box where the container disk is full but some other mount is not, that
+# is the difference between the two envs coexisting and swapping them in and
+# out. Whatever mount you pick, treat it as scratch: only the weights are
+# expensive, and a venv rebuilds from a script.
+QWEN_VENV="${QWEN_VENV:-$IDM_ROOT/venv-qwen}"
 PIP_INDEX_URL="${PIP_INDEX_URL-https://pypi.tuna.tsinghua.edu.cn/simple}"
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
 
