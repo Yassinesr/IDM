@@ -118,8 +118,9 @@ off through files rather than sharing a process — the split costs a file copy,
 not a redesign.
 
 ```bash
-# A: generate, then copy the variants out (a few MB of PNGs)
-bash scripts/pipeline/00_setup_qwen_env.sh
+# A: build (Qwen env only - no IDM-VTON, no weights), generate, copy out
+bash scripts/alaya/bootstrap_all.sh --qwen-only
+source $IDM_ROOT/venv-qwen/bin/activate
 python scripts/pipeline/10_generate_views.py --reference ... --count 8
 # from your laptop:
 scp -r qwen-box:/root/idm/IDM/work/variants ./variants

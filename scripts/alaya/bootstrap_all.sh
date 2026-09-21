@@ -7,6 +7,7 @@
 # Each stage is skippable and each is safe to re-run, so a failure part-way
 # means fixing that one thing and running it again, not starting over.
 #
+#   --qwen-only      stage 10 box: Qwen env only, no IDM-VTON, no weights
 #   --skip-storage   do not verify persistent storage first
 #   --skip-idm       do not build the IDM-VTON env
 #   --skip-weights   do not download checkpoints
@@ -22,11 +23,17 @@ cd "$REPO_DIR"
 
 SKIP_STORAGE=0 SKIP_IDM=0 SKIP_WEIGHTS=0 SKIP_QWEN=0 SLIM=""
 for a in "$@"; do case "$a" in
+    --qwen-only)    SKIP_IDM=1; SKIP_WEIGHTS=1 ;;
     --skip-storage) SKIP_STORAGE=1 ;; --skip-idm) SKIP_IDM=1 ;;
     --skip-weights) SKIP_WEIGHTS=1 ;; --skip-qwen) SKIP_QWEN=1 ;;
     --slim) SLIM="--slim" ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
 esac; done
+
+# On a Qwen-only box there is no IDM-VTON env to source and nothing for
+# preflight to check - it would fail on a machine that is entirely correct.
+IDM_STAGES=1
+[ "$SKIP_IDM" = "1" ] && [ "$SKIP_WEIGHTS" = "1" ] && IDM_STAGES=0
 
 step() { echo; echo "════════ $* ════════"; }
 fail() { echo; echo "FAILED at: $*" >&2
@@ -55,8 +62,10 @@ if [ "$SKIP_IDM" = "0" ]; then
     bash scripts/alaya/00_bootstrap_workshop.sh || fail "IDM-VTON env"
 fi
 
-# shellcheck disable=SC1091
-source scripts/alaya/env.sh || fail "sourcing env.sh"
+if [ "$IDM_STAGES" = "1" ]; then
+    # shellcheck disable=SC1091
+    source scripts/alaya/env.sh || fail "sourcing env.sh"
+fi
 
 # -------------------------------------------------------------- weights -----
 if [ "$SKIP_WEIGHTS" = "0" ]; then
@@ -66,8 +75,10 @@ if [ "$SKIP_WEIGHTS" = "0" ]; then
 fi
 
 # ------------------------------------------------------------- preflight ----
-step "4/5  preflight"
-python scripts/alaya/preflight.py || fail "preflight - fix the FAIL lines above"
+if [ "$IDM_STAGES" = "1" ]; then
+    step "4/5  preflight"
+    python scripts/alaya/preflight.py || fail "preflight - fix the FAIL lines above"
+fi
 
 # ----------------------------------------------------------------- qwen -----
 if [ "$SKIP_QWEN" = "0" ]; then
@@ -82,7 +93,8 @@ cat <<EOF
 
 ════════ done ════════
 
-IDM-VTON (stages 20, 30, and the try-on demo):
+$([ "$IDM_STAGES" = "0" ] && echo "This box runs stage 10 only. Copy work/variants/ to the IDM-VTON box
+for stages 20 and 30." || echo "IDM-VTON (stages 20, 30, and the try-on demo):")
     source scripts/alaya/env.sh
     python scripts/alaya/demo_single.py --category lower_body \\
         --human gradio_demo/example/human/model_front.jpg \\
