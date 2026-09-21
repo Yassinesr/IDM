@@ -405,6 +405,49 @@ beside each result, `--steps`, `--seed`, `--guidance-scale`, `--out-dir`.
 
 ---
 
+## 9a. Measuring VRAM
+
+Sizing a card is guesswork until you measure it. `measure_vram.py` samples
+`nvidia-smi` from outside the process being measured, so it needs no edits to
+the stage scripts and — unlike `torch.cuda.max_memory_allocated()` — it also
+sees the CUDA context and the ONNX Runtime and detectron2 allocations that
+human parsing and DensePose make.
+
+One short run per stage, each in whichever environment that stage needs:
+
+```bash
+# in venv-qwen
+python scripts/alaya/measure_vram.py --label stage10 -- \
+    python scripts/pipeline/10_generate_views.py \
+        --reference gradio_demo/example/human/model_front.jpg --count 1
+
+# in venv
+python scripts/alaya/measure_vram.py --label stage30 -- \
+    python scripts/pipeline/30_tryon_batch.py --in-dir work/variants \
+        --garment gradio_demo/example/cloth/yoga_pants.jpg \
+        --desc "plain mauve high-waisted leggings" --limit 1
+```
+
+Each run reports **resident** (weights held throughout), **spike**
+(activations on top) and **peak**, and saves them to `work/vram/<label>.json`
+so stages measured hours apart in different environments still add up.
+
+```bash
+python scripts/alaya/measure_vram.py --report
+```
+
+The report combines them: resident from every stage, plus one spike, since only
+one stage steps at a time. It also prints the naive sum of peaks as an upper
+bound, and rates the usual card sizes against both.
+
+`--csv <path>` writes the full timeline if you want to see where the spike
+lands. `--interval` defaults to 0.25 s; lower it for a short run, raise it if
+sampling shows up in your timings.
+
+Inside a container `nvidia-smi` often cannot attribute memory to a PID, in
+which case the script falls back to total-minus-baseline and says so — accurate
+as long as nothing else is using the GPU, so check the baseline it prints.
+
 ## 10. Getting results off the box
 
 From your laptop, not the container:
@@ -465,6 +508,8 @@ python scripts/alaya/preflight.py
 bash scripts/alaya/sync_from_github.sh [--force] [--assets]
 bash scripts/alaya/reclaim_disk.sh [--yes]
 python scripts/alaya/prune_hf_cache.py [--force]
+python scripts/alaya/measure_vram.py --label <name> -- <command>
+python scripts/alaya/measure_vram.py --report
 python scripts/alaya/find_local_models.py [dir]
 
 # single try-on
