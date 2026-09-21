@@ -39,7 +39,110 @@ instructions are therefore unnecessary here; they would also need
 `HF_ENDPOINT=https://hf-mirror.com`, since huggingface.co is not reachable from
 the cluster.
 
-What *does* cost disk is the second venv — roughly 10 GB, mostly torch.
+What *does* cost disk is the second venv — roughly 10 GB, mostly torch's
+bundled CUDA libraries.
+
+### When there is no room for a second torch
+
+```bash
+source scripts/alaya/env.sh
+bash scripts/pipeline/00_setup_qwen_env.sh --overlay
+export QWEN_OVERLAY=$IDM_ROOT/qwen-overlay
+python scripts/pipeline/10_generate_views.py --reference ... --count 3
+```
+
+Overlay mode installs *only* the new libraries — diffusers, transformers,
+tokenizers — into a directory stage 10 puts first on `sys.path`. They shadow the
+IDM-VTON env's pinned versions while its torch is reused, so the cost is a few
+hundred MB instead of ~10 GB.
+
+The install uses `--no-deps` on purpose: resolving normally would drag torch in
+and undo the point. So **every package that must be newer than the IDM-VTON
+env's copy has to be named explicitly**. `huggingface_hub` is one — the env pins
+0.25.2 for diffusers 0.25.0, while modern diffusers needs `DDUFEntry`, added in
+0.27. Overriding it is safe precisely because the overlay is only on `sys.path`
+when `QWEN_OVERLAY` is set: stages 20 and 30 still see 0.25.2.
+
+If an import fails naming a symbol the older copy lacks, add that package and
+rebuild:
+
+```bash
+QWEN_OVERLAY_PKGS="diffusers>=0.35 transformers>=4.51 tokenizers \
+    huggingface_hub>=0.27 safetensors accelerate <the-missing-one>" \
+    bash scripts/pipeline/00_setup_qwen_env.sh --overlay
+```
+
+**Overlay mode does not work against torch 2.0.1**, which is what the IDM-VTON
+env has. Checked against the published wheels:
+
+| diffusers | has `QwenImageEditPlusPipeline` | touches `torch.xpu` at import |
+|---|---|---|
+| 0.33.1 | no | no |
+| 0.34.0 | no | yes |
+| 0.35.1 | no | yes |
+| 0.36.0 | **yes** | yes |
+
+`Qwen-Image-Edit-2511` declares `QwenImageEditPlusPipeline`, which first ships in
+0.36.0; `torch.xpu` became an import-time reference in 0.34.0 and arrived in
+torch 2.4. No version satisfies both, so this needs a full venv with its own
+torch — roughly 10 GB, and there is no way around that number.
+
+Overlay mode remains useful where the base torch is already 2.4+. Stage 10
+prints the torch, diffusers and hub versions it loaded, and names this specific
+floor when it hits it.
+
+### The pipeline class
+
+`Qwen-Image-Edit-2511`'s `model_index.json` names **`QwenImageEditPlusPipeline`**.
+Running stage 10 in the IDM-VTON env fails with
+`module diffusers has no attribute QwenImageEditPlusPipeline` — that is the
+pinned 0.25.0 diffusers, not a broken model. It is a useful smoke test: if you
+see that error, the wrong environment is active.
+
+## When no PVC is available: one container per stage
+
+Every instance type offers exactly 50 GB of system disk, and if NAS storage
+cannot be activated there is no larger option. Both stacks do not fit together:
+
+| | A: stage 10 (Qwen) | B: stages 20/30 (IDM-VTON) | both together |
+|---|---|---|---|
+| base image | 3.5 | 3.5 | 3.5 |
+| venv-qwen | 10 | — | 10 |
+| venv (IDM-VTON) | — | 5 | 5 |
+| weights | 0 (read from `/root/public`) | 32 | 32 |
+| repo + `ckpt/` | 2 | 2 | 2 |
+| **total of 49 GB** | **15.6 ✓** | **43.5 ✓** | **52.5 ✗** |
+
+Separately they both fit. That is workable here because the stages already hand
+off through files rather than sharing a process — the split costs a file copy,
+not a redesign.
+
+```bash
+# A: generate, then copy the variants out (a few MB of PNGs)
+bash scripts/pipeline/00_setup_qwen_env.sh
+python scripts/pipeline/10_generate_views.py --reference ... --count 8
+# from your laptop:
+scp -r qwen-box:/root/idm/IDM/work/variants ./variants
+scp -r ./variants idm-box:/root/idm/IDM/work/
+
+# B: masks and try-on
+python scripts/pipeline/20_leg_masks.py --in-dir work/variants
+python scripts/pipeline/30_tryon_batch.py --in-dir work/variants --garment ... --desc ...
+```
+
+Container B has ~5 GB of headroom, so on it:
+
+- set `IDM_ALLOW_EPHEMERAL=1` — no PVC means `IDM_ROOT` is on the container
+  disk, and this is now a deliberate choice rather than the accident the guard
+  exists to catch. It also disables the pip cache, which is dead weight here.
+- **shut down (关机), never release (释放).** A graceful stop saves the image and
+  keeps the 32 GB download; a release costs it.
+- run `git gc` occasionally — `.git` reached 4 GB on the last container.
+
+Keep pressing for storage in parallel. The platform banner mentions
+*大容量存储和NAS型存储* — two separate products, so if NAS cannot be activated,
+高容量 storage may still be available, and activation is usually an account
+permission rather than a technical limit.
 
 ## Running it
 
