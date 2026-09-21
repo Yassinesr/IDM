@@ -365,6 +365,7 @@ Back in the IDM-VTON env.
 ```bash
 source scripts/alaya/env.sh
 python scripts/pipeline/20_leg_masks.py --in-dir work/variants --overlay
+python scripts/pipeline/25_qwen_mask.py --from-failures work/masks/_unsegmented.txt
 ```
 
 Writes `work/masks/NN_<pose>.mask.png`: white = leg area, black = everything
@@ -385,6 +386,38 @@ cutting there. When neither ankle is detected the mask keeps the full leg
 rather than guessing.
 
 ---
+
+### When the parser cannot read an image
+
+OpenPose is needed only for the ankle cut, so a photo it cannot read no longer
+skips the segmentation — stage 20 parses it anyway and says "no ankle cut".
+That covers most crops, since a frame with no head usually has no feet either.
+
+What does fail is the parser itself returning nothing, which happens on crops
+it was never trained on. Those images are listed in
+`work/masks/_unsegmented.txt`, and there is a fallback in the Qwen env:
+
+```bash
+source scripts/alaya/_activate.sh
+IDM_VENV=$IDM_ROOT/venv-qwen idm_activate
+python scripts/pipeline/25_qwen_mask.py \
+    --from-failures work/masks/_unsegmented.txt --keep-raw
+```
+
+It asks Qwen-Image-Edit to repaint the photo as a two-colour mask, thresholds
+that to binary, and writes `<name>.mask.png` beside stage 20's, at the source
+resolution and aspect.
+
+**These masks are generated, not measured.** Stage 20 runs a network trained to
+label body parts and its edges follow the pixels. Qwen is an image editor being
+asked firmly to paint one region white; its edges are plausible rather than
+correct, and it can shift the subject slightly while repainting. The script
+writes an overlay for every mask and prints the white coverage — check both.
+Where stage 20 produces anything at all, its mask is the better one.
+
+`--target` changes what gets painted white (default: trousers, leggings or bare
+legs). `--threshold` tunes the cut between white and black. `--keep-raw` saves
+Qwen's unthresholded output as `<name>.qwen.png`.
 
 ## 9. Stage 30 — try-on across all views
 
@@ -478,6 +511,7 @@ bash scripts/pipeline/00_setup_qwen_env.sh          # QWEN_VENV=... to relocate
 python scripts/pipeline/10_generate_views.py --list-poses
 python scripts/pipeline/10_generate_views.py --reference <img> --count 4
 python scripts/pipeline/20_leg_masks.py --in-dir work/variants --overlay
+python scripts/pipeline/25_qwen_mask.py --from-failures work/masks/_unsegmented.txt
 python scripts/pipeline/30_tryon_batch.py --in-dir work/variants \
     --garment <img> --desc "..." --category lower_body
 ```

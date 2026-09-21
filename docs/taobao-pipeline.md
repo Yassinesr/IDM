@@ -14,6 +14,7 @@ work/variants/NN_<pose>.png           one full-body view per pose
    │  stage 20   human parsing + ankle clip      [IDM-VTON venv]
    ▼
 work/masks/NN_<pose>.mask.png         white = leg area, black = rest   ← deliverable
+  (stage 25 fills in any the parser could not read, using Qwen)
    │  stage 30   IDM-VTON try-on                 [IDM-VTON venv]
    ▼
 work/results/NN_<pose>.tryon.png      the garment on every view

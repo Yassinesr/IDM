@@ -50,6 +50,9 @@ def parse_args():
                     help="shift the ankle cut down (+) or up (-), in 384x512 pixels")
     ap.add_argument("--full-size", action="store_true",
                     help="write at the source image's resolution instead of 768x1024")
+    ap.add_argument("--min-coverage", type=float, default=0.5,
+                    help="percent white below which a mask counts as a failure "
+                         "and is listed for the Qwen fallback (default 0.5)")
     ap.add_argument("--overlay", action="store_true",
                     help="also write a <name>.overlay.png for eyeballing the fit")
     return ap.parse_args()
@@ -111,21 +114,33 @@ def main():
     openpose_model.preprocessor.body_estimation.model.to("cuda:0")
 
     ok = failed = 0
+    unsegmented = []
     for i, src in enumerate(images, 1):
         img = Image.open(src).convert("RGB")
         out_size = img.size if args.full_size else (768, 1024)
         small = img.resize((PARSE_WIDTH, PARSE_HEIGHT))
 
+        # OpenPose is needed ONLY for the ankle cut. The parser that actually
+        # produces the mask is independent of it, so a photo it cannot read -
+        # a crop with no head or shoulders - is not a reason to give up on the
+        # segmentation. It is a reason to skip the cut, which a crop with no
+        # feet in it did not need anyway.
         try:
             keypoints = openpose_model(small)
         except IndexError:
-            print(f"  [{i}/{len(images)}] {src.name}: SKIP - no person detected")
-            failed += 1
-            continue
+            keypoints = None
+            print(f"  [{i}/{len(images)}] {src.name}: no person found by OpenPose "
+                  "- parsing anyway, no ankle cut")
 
         model_parse, _ = parsing_model(small)
 
         if args.region == "inpaint":
+            if keypoints is None:
+                print(f"  [{i}/{len(images)}] {src.name}: SKIP - --region inpaint "
+                      "needs keypoints")
+                failed += 1
+                unsegmented.append(src)
+                continue
             mask_img, _ = get_mask_location("hd", "lower_body", model_parse, keypoints)
             arr = (np.array(mask_img.resize((PARSE_WIDTH, PARSE_HEIGHT),
                                             Image.NEAREST)) > 127)
@@ -135,7 +150,7 @@ def main():
             arr = np.isin(parse, list(LEG_LABELS))
 
         cut = None
-        if not args.keep_feet:
+        if not args.keep_feet and keypoints is not None:
             cut = ankle_cut_y(keypoints, args.ankle_offset)
             if cut is None:
                 print(f"  [{i}/{len(images)}] {src.name}: no ankle keypoint, feet kept")
@@ -143,6 +158,16 @@ def main():
                 arr[max(0, min(cut, PARSE_HEIGHT)):, :] = False
 
         coverage = 100.0 * arr.mean()
+        if coverage < args.min_coverage:
+            # The parser ran but found essentially no leg. ATR is trained on
+            # whole people, so a tight crop can come back empty rather than
+            # wrong. Nothing useful to write.
+            print(f"  [{i}/{len(images)}] {src.name}: FAILED - only "
+                  f"{coverage:.2f}% white, below --min-coverage")
+            failed += 1
+            unsegmented.append(src)
+            continue
+
         mask = Image.fromarray((arr * 255).astype(np.uint8)).resize(out_size, Image.NEAREST)
         dest = args.out_dir / f"{src.stem}.mask.png"
         mask.save(dest)
@@ -160,7 +185,20 @@ def main():
         ok += 1
 
     print(f"\n{ok} mask(s) in {args.out_dir.resolve()}" +
-          (f", {failed} skipped" if failed else ""))
+          (f", {failed} failed" if failed else ""))
+
+    listing = args.out_dir / "_unsegmented.txt"
+    if unsegmented:
+        listing.write_text("".join(f"{p}\n" for p in unsegmented))
+        print(f"\n{len(unsegmented)} image(s) the parser could not segment, "
+              f"listed in\n  {listing}")
+        print("\nThese are usually crops the parser was never trained on - no "
+              "head,\nno shoulders, or a frame too tight to read as a person. "
+              "To fall back\nto Qwen, in the Qwen env:")
+        print(f"  python scripts/pipeline/25_qwen_mask.py --from-failures {listing}")
+    elif listing.exists():
+        listing.unlink()   # stale list from an earlier run
+
     return 0 if ok else 1
 
 
