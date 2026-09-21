@@ -23,20 +23,40 @@ from _qwen import (  # noqa: E402  (must follow the sys.path insert)
 # not just a description of the output. Removing source text is stated first and
 # concretely: a reference carrying a brand mark is otherwise imitated, and a
 # negative prompt alone is a weak lever against something visible in the input.
+# Arrows and dashed guide lines are named alongside the text: a Taobao
+# marketing crop carries all three, and an editing model reproduces whatever it
+# is not told to remove.
 TEXT_REMOVAL = (
-    "Remove all text, logos, watermarks, brand names and corner badges, "
-    "reconstructing the background cleanly where they were. "
+    "Remove all text, numbers, logos, watermarks, brand names, corner badges, "
+    "arrows and dashed guide lines, reconstructing the garment and background "
+    "cleanly underneath them. "
+)
+
+# What to preserve, when the reference already shows a whole person.
+IDENTITY = (
+    " Keep the same woman, the same face, the same hairstyle and exactly the "
+    "same clothing."
+)
+
+# What to do instead when it does not - a half-body product crop, where there
+# is no face to keep and asking for one is a contradiction. The garment is the
+# thing that must survive; the rest is invented.
+EXTEND = (
+    " This photograph shows only part of the body. Extend it into a complete "
+    "full-body shot: invent a head, face, hair, torso and arms that suit the "
+    "visible body and match its skin tone, and show both legs and both feet in "
+    "full. Keep the garment exactly as it appears - the same colour, the same "
+    "fabric, the same cut, the same length."
 )
 
 # True of every variant. Deliberately says nothing about which way the model
 # faces - that is the pose's job, and a style block repeating "facing the
 # camera" would fight every pose that is not a front view.
-STYLE = (
-    " Keep the same woman, the same face, the same hairstyle and exactly the "
-    "same clothing. Taobao e-commerce product photograph: full-body shot, the "
-    "top of the head and both feet fully inside the frame, plain seamless "
-    "light grey studio background, soft even lighting, sharp focus, high "
-    "resolution. The final image must contain no text of any kind."
+FRAMING = (
+    " Taobao e-commerce product photograph: full-body shot, the top of the head "
+    "and both feet fully inside the frame, plain seamless light grey studio "
+    "background, soft even lighting, sharp focus, high resolution. The final "
+    "image must contain no text of any kind."
 )
 
 # One entry per variant, because an editing model reproduces its input unless
@@ -98,10 +118,10 @@ POSE_BY_SLUG = {slug: text for slug, text in POSES}
 OFF_FRONT = {"profile_left", "profile_right", "back", "back_over_shoulder"}
 
 
-def build_prompt(pose_instruction: str) -> str:
+def build_prompt(pose_instruction: str, extend: bool = False) -> str:
     """Edit instruction first, constraints after - that is the order this kind
     of model weights most heavily."""
-    return TEXT_REMOVAL + pose_instruction + STYLE
+    return TEXT_REMOVAL + pose_instruction + (EXTEND if extend else IDENTITY) + FRAMING
 
 
 def select_poses(spec: str, count: int):
@@ -119,9 +139,9 @@ def select_poses(spec: str, count: int):
     return chosen
 
 DEFAULT_NEGATIVE = (
-    "text, watermark, logo, brand name, letters, caption, signature, "
-    "cropped head, cropped feet, close-up, collage, multiple people, "
-    "blurry, distorted anatomy, extra limbs"
+    "text, watermark, logo, brand name, letters, caption, signature, arrows, "
+    "dashed lines, cropped head, cropped feet, half body, waist-up crop, "
+    "close-up, collage, multiple people, blurry, distorted anatomy, extra limbs"
 )
 
 
@@ -140,6 +160,10 @@ def parse_args():
                     help="print the pose table and exit")
     ap.add_argument("--repeat", type=int, default=1,
                     help="images per pose, each with its own seed")
+    ap.add_argument("--extend", action="store_true",
+                    help="the reference is a partial crop (no head, or no "
+                         "feet): invent the missing body instead of asking to "
+                         "keep a face that is not there")
     ap.add_argument("--model", default=os.environ.get("QWEN_MODEL_PATH", DEFAULT_MODEL))
     ap.add_argument("--prompt", default=None,
                     help="one prompt for every image, replacing the pose table "
@@ -193,7 +217,7 @@ def main():
                 # pose index * 100 keeps each pose's seeds in its own block, so
                 # adding a pose never renumbers another one's output.
                 seed = args.seed + pi * 100 + r
-                jobs.append((slug, build_prompt(instruction), seed,
+                jobs.append((slug, build_prompt(instruction, args.extend), seed,
                              args.out_dir / f"{len(jobs):02d}_{slug}_seed{seed}.png"))
 
     print(f"model     {model_dir}")
@@ -207,6 +231,11 @@ def main():
     else:
         slugs = [j[0] for j in jobs]
         print(f"poses     {', '.join(dict.fromkeys(slugs))}")
+        if args.extend:
+            print("extend    the reference is a crop; the missing body is "
+                  "invented.\n          Only the garment is held fixed - the "
+                  "face and build are not\n          in the input and will "
+                  "differ between seeds.")
         off = [s_ for s_ in dict.fromkeys(slugs) if s_ in OFF_FRONT]
         if off:
             verb = "is" if len(off) == 1 else "are"

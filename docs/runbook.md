@@ -337,6 +337,45 @@ table with one text.
 First load pulls 54 GB off CephFS, so expect minutes of silence before the
 first step counter moves.
 
+### Extending a crop into a full-body model
+
+A half-body product crop cannot go through stages 20 and 30 — IDM-VTON runs
+OpenPose first and needs a head, neck and shoulders to find a person at all.
+`--extend` turns the crop into a full-body model that can:
+
+```bash
+python scripts/pipeline/10_generate_views.py \
+    --reference gradio_demo/example/human/only_lower.jpg \
+    --extend --poses front,three_quarter_left,walking \
+    --out-dir work/variants-lower
+```
+
+It swaps the "keep the same woman, the same face" clause — a contradiction when
+there is no face in the input — for an instruction to invent a head, torso and
+arms that suit the visible body, while holding the garment fixed. Text removal
+now names arrows and dashed guide lines too, which is what a marketing crop
+carries alongside the text.
+
+Then the usual pipeline, in the IDM env:
+
+```bash
+python scripts/pipeline/20_leg_masks.py --in-dir work/variants-lower --overlay
+python scripts/pipeline/30_tryon_batch.py --in-dir work/variants-lower \
+    --garment gradio_demo/example/cloth/yoga_pants.jpg \
+    --desc "plain mauve high-waisted leggings" --category lower_body
+```
+
+**What is real and what is invented.** The garment and the visible part of the
+body come from your photo. The face, hair, arms and the rest of the legs do
+not — they are generated, and they will differ between seeds and between poses,
+because nothing in the input constrains them. That is fine when the model is a
+vehicle for showing the garment, and wrong if the person has to be a specific
+person.
+
+Check that the garment survived the extension before running stage 30. If Qwen
+changed its colour or length, the try-on afterwards is measuring the wrong
+garment.
+
 ### Check the output before tearing down the env
 
 Rebuilding costs 8 GB and 15 minutes, so judge them now:
