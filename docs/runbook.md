@@ -438,6 +438,38 @@ beside each result, `--steps`, `--seed`, `--guidance-scale`, `--out-dir`.
 
 ---
 
+## 9b. Images IDM-VTON cannot take
+
+IDM-VTON runs OpenPose first and needs a head, neck and shoulders to find a
+person. A half-body product crop has none, so stage 30 skips it and no amount
+of tuning changes that. Qwen has no such requirement, and can remove the
+overlay text and swap the garment in one pass:
+
+```bash
+source scripts/alaya/_activate.sh
+IDM_VENV=$IDM_ROOT/venv-qwen idm_activate
+
+python scripts/pipeline/35_qwen_tryon.py \
+    --human gradio_demo/example/human/only_lower.jpg \
+    --garment gradio_demo/example/cloth/yoga_pants.jpg \
+    --desc "plain mauve high-waisted leggings" \
+    --count 3
+```
+
+Writes `work/results/<name>.qwen_tryon.png` at the source resolution and
+aspect. `--clean-only` removes the text and changes no clothing. `--count N`
+gives N seeds, which is worth it here: text removal over fabric is
+inconsistent, and picking the best of three costs one extra minute.
+
+**The trade.** IDM-VTON warps the actual pixels of your garment photo onto the
+body, so the print, seams and cut survive. Qwen re-imagines the garment from
+the reference: the result looks right, but fine detail drifts. Plain garments
+survive this; patterned or branded ones do not.
+
+For a garment that must stay faithful, go the other way instead — use stage 10
+to outpaint the crop into a full-body model, then run stage 30 on that. You
+lose the half-body framing and gain a garment that is actually yours.
+
 ## 10. Getting results off the box
 
 From your laptop, not the container:
@@ -514,6 +546,7 @@ python scripts/pipeline/20_leg_masks.py --in-dir work/variants --overlay
 python scripts/pipeline/25_qwen_mask.py --from-failures work/masks/_unsegmented.txt
 python scripts/pipeline/30_tryon_batch.py --in-dir work/variants \
     --garment <img> --desc "..." --category lower_body
+python scripts/pipeline/35_qwen_tryon.py --human <img> --garment <img> --desc "..." 
 ```
 
 ## Environment variables
