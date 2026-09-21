@@ -69,12 +69,23 @@ EOF
 fi
 
 echo "==> target: $QWEN_VENV"
+
+# pip keeps every wheel it downloads. Building a torch stack that way needs the
+# download AND the unpacked copy on disk at once - roughly 2.5 GB of headroom
+# bought for a reinstall that will never happen on a container this size.
+export PIP_NO_CACHE_DIR=1
+
 FREE_GB="$(df -BG --output=avail "$IDM_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')"
-echo "==> free on $IDM_ROOT: ${FREE_GB:-?} GB"
-if [ -n "${FREE_GB:-}" ] && [ "$FREE_GB" -lt 12 ]; then
-    echo "WARNING: this venv needs roughly 10 GB (torch is most of it)." >&2
-    echo "         The model weights themselves cost nothing - they are read" >&2
-    echo "         straight off /root/public - but the venv is not free." >&2
+echo "==> free on $IDM_ROOT: ${FREE_GB:-?} GB (pip caching disabled)"
+if [ -n "${FREE_GB:-}" ] && [ "$FREE_GB" -lt 10 ]; then
+    echo >&2
+    echo "WARNING: this env lands at roughly 8 GB - torch and its bundled CUDA" >&2
+    echo "         libraries are nearly all of it. The Qwen weights themselves" >&2
+    echo "         cost nothing; they are read off /root/public in place." >&2
+    echo "         If the install dies with ENOSPC, stop and run:" >&2
+    echo "             bash scripts/alaya/reclaim_disk.sh" >&2
+    echo "         which reports what is cache and what is not." >&2
+    echo >&2
 fi
 
 if [ -f "$QWEN_VENV/bin/activate" ] || [ -d "$QWEN_VENV/conda-meta" ]; then
