@@ -365,6 +365,26 @@ python scripts/pipeline/30_tryon_batch.py --in-dir work/variants-lower \
     --desc "plain mauve high-waisted leggings" --category lower_body
 ```
 
+### Several models, one pose
+
+A garment reads differently on different bodies, so one render is a thin
+sample:
+
+```bash
+python scripts/pipeline/10_generate_views.py \
+    --reference gradio_demo/example/human/only_lower.jpg \
+    --extend --poses front --models 5 \
+    --out-dir work/variants-lower
+```
+
+Five people, same pose, same garment — `00_front_straight_black_slim_…` and so
+on, the slug naming which. `--list-models` prints the table, `--models all`
+takes all eight, `--models blonde_petite,short_curls_tall` picks by name.
+Without `--models`, nothing changes from before.
+
+Poses and models multiply, so `--poses front,walking --models 3` is six images.
+Start with one pose until you know the garment survives.
+
 **What is real and what is invented.** The garment and the visible part of the
 body come from your photo. The face, hair, arms and the rest of the legs do
 not — they are generated, and they will differ between seeds and between poses,
@@ -399,13 +419,29 @@ when you select one.
 
 ## 8. Stage 20 — leg masks
 
-Back in the IDM-VTON env.
+Two ways to segment, and which is better depends on your images. Run both once
+on the same batch and compare — each prints its timing in the same format.
+
+### Qwen, staying in the stage 10 environment
+
+```bash
+python scripts/pipeline/25_qwen_mask.py --in-dir work/variants-lower
+```
+
+No env swap: the mask step follows stage 10 with nothing to rebuild, and the
+model is already loaded. The mask is *generated* — edges are plausible rather
+than measured, and the model can shift the subject slightly while repainting.
+
+### The IDM-VTON parser
 
 ```bash
 source scripts/alaya/env.sh
-python scripts/pipeline/20_leg_masks.py --in-dir work/variants --overlay
-python scripts/pipeline/25_qwen_mask.py --from-failures work/masks/_unsegmented.txt
+python scripts/pipeline/20_leg_masks.py --in-dir work/variants-lower --overlay
 ```
+
+A segmentation network trained to label body parts, so its edges follow real
+pixels, and it cuts the feet at the ankles OpenPose finds. Loads in seconds,
+but needs the IDM-VTON env — on a 49 GB disk, an environment swap.
 
 Writes `work/masks/NN_<pose>.mask.png`: white = leg area, black = everything
 else, feet excluded. `--overlay` also writes the mask drawn over the photo,
@@ -457,6 +493,28 @@ Where stage 20 produces anything at all, its mask is the better one.
 `--target` changes what gets painted white (default: trousers, leggings or bare
 legs). `--threshold` tunes the cut between white and black. `--keep-raw` saves
 Qwen's unthresholded output as `<name>.qwen.png`.
+
+### Comparing the two
+
+Both report load time apart from per-image time, because that is where they
+differ most — a few hundred MB of ONNX against 54 GB off a shared mount. A
+single seconds-per-image figure with the load folded in tells you the batch
+size, not which method is faster.
+
+```bash
+# Qwen env, straight after stage 10
+python scripts/pipeline/25_qwen_mask.py --in-dir work/variants-lower \
+    --out-dir work/masks-qwen --keep-raw
+
+# IDM env
+python scripts/pipeline/20_leg_masks.py --in-dir work/variants-lower \
+    --out-dir work/masks-idm --overlay
+```
+
+Then open `work/masks-qwen/*.overlay.png` beside `work/masks-idm/*.overlay.png`.
+Speed is the easy half of the answer; the overlays are the half that decides
+it. Expect the parser to win on edge accuracy wherever it produces anything at
+all, and Qwen to win wherever the parser returns nothing.
 
 ## 9. Stage 30 — try-on across all views
 
@@ -579,9 +637,12 @@ bash scripts/alaya/02_run_gradio.sh
 
 # pipeline
 bash scripts/pipeline/00_setup_qwen_env.sh          # QWEN_VENV=... to relocate
-python scripts/pipeline/10_generate_views.py --list-poses
+python scripts/pipeline/10_generate_views.py --list-poses [--list-models]
 python scripts/pipeline/10_generate_views.py --reference <img> --count 4
-python scripts/pipeline/20_leg_masks.py --in-dir work/variants --overlay
+python scripts/pipeline/10_generate_views.py --reference <img> --extend \
+    --poses front --models 5
+python scripts/pipeline/20_leg_masks.py --in-dir <dir> --overlay
+python scripts/pipeline/25_qwen_mask.py --in-dir <dir>
 python scripts/pipeline/25_qwen_mask.py --from-failures work/masks/_unsegmented.txt
 python scripts/pipeline/30_tryon_batch.py --in-dir work/variants \
     --garment <img> --desc "..." --category lower_body
