@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _qwen import (  # noqa: E402  (must follow the sys.path insert)
     DEFAULT_MODEL, load_pipeline, resolve_model, supported,
 )
+from _timing import Timer  # noqa: E402
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 DEFAULT_TARGET = "the trousers, leggings, or bare legs"
@@ -164,15 +165,19 @@ def main():
     import torch
     from PIL import Image
 
+    timer = Timer("Qwen-Image-Edit")
+    timer.start_load()
     pipe = load_pipeline(model_dir, offload=args.offload)
     if pipe is None:
         return 1
+    timer.end_load()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     prompt = PROMPT.format(target=args.target)
     ok = 0
 
     for i, src in enumerate(images, 1):
+        timer.start_image()
         img = Image.open(src).convert("RGB")
         w, h = gen_size(*img.size, args.long_side)
 
@@ -207,13 +212,16 @@ def main():
         Image.composite(Image.blend(img, tint, 0.45), img, mask) \
              .save(args.out_dir / f"{src.stem}.overlay.png")
 
+        dt = timer.end_image()
         verdict = ""
         if coverage < 1:
             verdict = "  <- almost nothing white; the model probably refused"
         elif coverage > 70:
             verdict = "  <- almost everything white; it painted the whole frame"
-        print(f"      {coverage:.1f}% white{verdict}")
+        print(f"      {coverage:.1f}% white, {dt:.2f}s{verdict}")
         ok += 1
+
+    timer.report()
 
     print(f"\n{ok} mask(s) in {args.out_dir.resolve()}")
     print("Check the overlays before using these. A generated mask that is the "

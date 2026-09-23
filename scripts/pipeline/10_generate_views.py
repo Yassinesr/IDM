@@ -43,10 +43,61 @@ IDENTITY = (
 # thing that must survive; the rest is invented.
 EXTEND = (
     " This photograph shows only part of the body. Extend it into a complete "
-    "full-body shot: invent a head, face, hair, torso and arms that suit the "
-    "visible body and match its skin tone, and show both legs and both feet in "
-    "full. Keep the garment exactly as it appears - the same colour, the same "
+    "full-body shot showing the whole person from the top of the head to the "
+    "feet. Keep the garment exactly as it appears - the same colour, the same "
     "fabric, the same cut, the same length."
+)
+
+# Added only when no model has been chosen: with --models the person is
+# specified, and telling the model to match the visible skin tone as well would
+# be two instructions about the same thing.
+EXTEND_INFER_PERSON = (
+    " Invent a head, face, hair, torso and arms that suit the visible body and "
+    "match its skin tone."
+)
+
+# One entry per model. Retail sizing and colour read differently on different
+# bodies, so a garment shown on one build is a thin sample; these let the same
+# pose and the same garment be rendered on several. Slugs name a visible
+# feature so a filename says which is which.
+MODELS = [
+    ("straight_black_slim",
+     "a young East Asian woman with long straight black hair, fair skin and a "
+     "slim build"),
+    ("wavy_auburn_athletic",
+     "a young woman with light skin, shoulder-length wavy auburn hair and an "
+     "athletic build"),
+    ("short_curls_tall",
+     "a young Black woman with deep brown skin, short natural curls and a tall "
+     "slender build"),
+    ("dark_ponytail_curvy",
+     "a South Asian woman with medium brown skin, long dark hair in a ponytail "
+     "and a curvy build"),
+    ("olive_bob_midsize",
+     "a woman in her thirties with olive skin, a short dark bob and a mid-size "
+     "build"),
+    ("blonde_petite",
+     "a young woman with pale skin, long blonde hair and a petite build"),
+    ("brown_waves_hourglass",
+     "a Latina woman with warm brown skin, long dark wavy hair and an "
+     "hourglass figure"),
+    ("grey_bun_plus",
+     "a woman in her forties with light skin, greying hair in a low bun and a "
+     "plus-size build"),
+]
+
+MODEL_BY_SLUG = {slug: text for slug, text in MODELS}
+
+# Replaces IDENTITY: the point of choosing a model is that the person changes,
+# so "keep the same woman" would be the opposite instruction. The garment is
+# what must be held fixed instead.
+MODEL_CLAUSE = " The model is {desc}."
+
+# Only when EXTEND has not already said it - repeating the garment clause twice
+# in one prompt reads as a mistake and buys nothing.
+KEEP_GARMENT = (
+    " Keep exactly the same clothing as in the reference - the same colour, "
+    "the same fabric, the same cut, the same length."
 )
 
 # True of every variant. Deliberately says nothing about which way the model
@@ -118,10 +169,44 @@ POSE_BY_SLUG = {slug: text for slug, text in POSES}
 OFF_FRONT = {"profile_left", "profile_right", "back", "back_over_shoulder"}
 
 
-def build_prompt(pose_instruction: str, extend: bool = False) -> str:
+def build_prompt(pose_instruction: str, extend: bool = False,
+                 model_desc: str = None) -> str:
     """Edit instruction first, constraints after - that is the order this kind
     of model weights most heavily."""
-    return TEXT_REMOVAL + pose_instruction + (EXTEND if extend else IDENTITY) + FRAMING
+    parts = [TEXT_REMOVAL, pose_instruction]
+    if extend:
+        parts.append(EXTEND)
+        if model_desc is None:
+            parts.append(EXTEND_INFER_PERSON)
+    if model_desc:
+        parts.append(MODEL_CLAUSE.format(desc=model_desc))
+        if not extend:
+            parts.append(KEEP_GARMENT)
+    else:
+        parts.append(IDENTITY)
+    parts.append(FRAMING)
+    return "".join(parts)
+
+
+def select_models(spec):
+    """Resolve --models into [(slug, description)], or [(None, None)] for one
+    run with whatever person the reference or the model itself supplies."""
+    if spec in (None, ""):
+        return [(None, None)]
+    if spec == "all":
+        return MODELS
+    if spec.isdigit():
+        n = int(spec)
+        if not 1 <= n <= len(MODELS):
+            raise SystemExit(f"ERROR: --models takes 1..{len(MODELS)}, got {n}")
+        return MODELS[:n]
+    chosen = []
+    for name in (n.strip() for n in spec.split(",") if n.strip()):
+        if name not in MODEL_BY_SLUG:
+            raise SystemExit(
+                f"ERROR: unknown model {name!r}. Run --list-models to see them.")
+        chosen.append((name, MODEL_BY_SLUG[name]))
+    return chosen
 
 
 def select_poses(spec: str, count: int):
@@ -158,6 +243,11 @@ def parse_args():
                          "first --count entries")
     ap.add_argument("--list-poses", action="store_true",
                     help="print the pose table and exit")
+    ap.add_argument("--models", default=None,
+                    help="render every pose on several different people: a "
+                         "count (5), a comma-separated list of names, or 'all'")
+    ap.add_argument("--list-models", action="store_true",
+                    help="print the model table and exit")
     ap.add_argument("--repeat", type=int, default=1,
                     help="images per pose, each with its own seed")
     ap.add_argument("--extend", action="store_true",
@@ -183,6 +273,13 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.list_models:
+        print(f"{len(MODELS)} models (--models 5, --models "
+              f"{MODELS[0][0]},{MODELS[1][0]}, or --models all):\n")
+        for slug, text in MODELS:
+            print(f"  {slug}\n      {text}\n")
+        return 0
 
     if args.list_poses:
         print(f"{len(POSES)} poses (--poses front,walking,... or --poses all):\n")
@@ -212,13 +309,19 @@ def main():
             jobs.append(("custom", args.prompt, seed,
                          args.out_dir / f"{i:02d}_custom_seed{seed}.png"))
     else:
+        models = select_models(args.models)
         for pi, (slug, instruction) in enumerate(select_poses(args.poses, args.count)):
-            for r in range(args.repeat):
-                # pose index * 100 keeps each pose's seeds in its own block, so
-                # adding a pose never renumbers another one's output.
-                seed = args.seed + pi * 100 + r
-                jobs.append((slug, build_prompt(instruction, args.extend), seed,
-                             args.out_dir / f"{len(jobs):02d}_{slug}_seed{seed}.png"))
+            for mi, (mslug, mdesc) in enumerate(models):
+                for r in range(args.repeat):
+                    # Each pose and each model gets its own seed block, so
+                    # adding one never renumbers another one's output.
+                    seed = args.seed + pi * 1000 + mi * 10 + r
+                    name = f"{len(jobs):02d}_{slug}"
+                    if mslug:
+                        name += f"_{mslug}"
+                    jobs.append((slug,
+                                 build_prompt(instruction, args.extend, mdesc),
+                                 seed, args.out_dir / f"{name}_seed{seed}.png"))
 
     print(f"model     {model_dir}")
     print(f"reference {args.reference}")
@@ -231,11 +334,18 @@ def main():
     else:
         slugs = [j[0] for j in jobs]
         print(f"poses     {', '.join(dict.fromkeys(slugs))}")
+        models = select_models(args.models)
+        if args.models:
+            print(f"models    {', '.join(m for m, _ in models)}")
+            print("          the person changes between these; only the "
+                  "garment is held fixed")
         if args.extend:
             print("extend    the reference is a crop; the missing body is "
-                  "invented.\n          Only the garment is held fixed - the "
-                  "face and build are not\n          in the input and will "
-                  "differ between seeds.")
+                  "invented.")
+            if not args.models:
+                print("          Only the garment is held fixed - the face and "
+                      "build are not\n          in the input and will differ "
+                      "between seeds.")
         off = [s_ for s_ in dict.fromkeys(slugs) if s_ in OFF_FRONT]
         if off:
             verb = "is" if len(off) == 1 else "are"

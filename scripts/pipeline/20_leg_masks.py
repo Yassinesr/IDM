@@ -29,6 +29,8 @@ REPO = Path(__file__).resolve().parents[2]
 os.chdir(REPO)
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "gradio_demo"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _timing import Timer  # noqa: E402  (must follow the sys.path insert)
 
 PARSE_WIDTH, PARSE_HEIGHT = 384, 512
 R_ANKLE, L_ANKLE = 10, 13
@@ -109,13 +111,17 @@ def main():
     print(f"images    {len(images)}")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
+    timer = Timer("IDM-VTON parser (ATR + OpenPose)")
+    timer.start_load()
     parsing_model = Parsing(0)
     openpose_model = OpenPose(0)
     openpose_model.preprocessor.body_estimation.model.to("cuda:0")
+    timer.end_load()
 
     ok = failed = 0
     unsegmented = []
     for i, src in enumerate(images, 1):
+        timer.start_image()
         img = Image.open(src).convert("RGB")
         out_size = img.size if args.full_size else (768, 1024)
         small = img.resize((PARSE_WIDTH, PARSE_HEIGHT))
@@ -173,8 +179,9 @@ def main():
         mask.save(dest)
 
         note = f"ankle cut y={cut}" if cut is not None else "no cut"
+        dt = timer.end_image()
         print(f"  [{i}/{len(images)}] {src.name} -> {dest.name}  "
-              f"{coverage:.1f}% white, {note}")
+              f"{coverage:.1f}% white, {note}, {dt:.2f}s")
 
         if args.overlay:
             base = img.resize(out_size)
@@ -183,6 +190,8 @@ def main():
                 Image.blend(base, tint, 0.45), base, mask.convert("L"))
             blended.save(args.out_dir / f"{src.stem}.overlay.png")
         ok += 1
+
+    timer.report()
 
     print(f"\n{ok} mask(s) in {args.out_dir.resolve()}" +
           (f", {failed} failed" if failed else ""))
