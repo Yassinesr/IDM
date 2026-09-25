@@ -25,6 +25,49 @@ work/variants/NN_<pose>.png                  one full-body view per pose
 work/results/NN_<pose>.tryon.png             the garment on every view
 ```
 
+## The whole thing, from a fresh container
+
+```bash
+# 0. shell
+export IDM_ROOT=/pvc/idm IDM_ALLOW_EPHEMERAL=1
+cat >> ~/.bashrc <<'EOF'
+export IDM_ROOT=/pvc/idm
+export IDM_ALLOW_EPHEMERAL=1
+EOF
+
+# 1. code
+mkdir -p /pvc/idm && cd /pvc/idm
+git clone -b claude/alaya-new-cloud-setup-4ode4d git@github.com:Yassinesr/IDM.git IDM
+cd /pvc/idm/IDM
+
+# 2. environment and weights (~40 min; the 31 GB download is most of it)
+bash scripts/alaya/bootstrap_all.sh --single-torch
+
+# 3. check it works before trusting it
+python scripts/alaya/preflight.py
+python scripts/alaya/demo_single.py --category lower_body \
+    --human gradio_demo/example/human/model_front.jpg \
+    --garment gradio_demo/example/cloth/yoga_pants.jpg \
+    --desc "plain mauve leggings"
+
+# 4. the pipeline
+bash scripts/pipeline/run_all.sh \
+    --reference gradio_demo/example/human/model_front.jpg \
+    --garment  gradio_demo/example/cloth/yoga_pants.jpg \
+    --desc "plain mauve high-waisted leggings"
+```
+
+Step 4 generates one pose on five different models, masks them with both
+methods so the two can be compared on identical images, and puts the garment on
+each. Everything lands under `work/run/`. Add `--extend` when the reference is
+a partial crop rather than a whole person.
+
+On a container that already has the weights, step 2 skips the download by
+itself and takes about ten minutes.
+
+The rest of this document is what each step does and what to do when one of
+them fails.
+
 **Two environments, and they cannot be merged.** IDM-VTON is pinned to
 `diffusers==0.25.0` because `src/unet_hacked_*.py` subclass its internals, and
 it runs on torch 2.0.1. `QwenImageEditPlusPipeline` needs diffusers ≥ 0.36,
@@ -681,6 +724,7 @@ python scripts/alaya/demo_single.py --human <img> --garment <img> \
 bash scripts/alaya/02_run_gradio.sh
 
 # pipeline
+bash scripts/pipeline/run_all.sh --reference <img> --garment <img> --desc "..."
 bash scripts/pipeline/00_setup_qwen_env.sh          # QWEN_VENV=... to relocate
 python scripts/pipeline/10_generate_views.py --list-poses [--list-models]
 python scripts/pipeline/10_generate_views.py --reference <img> --count 4
