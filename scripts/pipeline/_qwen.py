@@ -88,7 +88,7 @@ def import_diffusers():
             print("\n       The overlay shadows only the packages it installed; "
                   "this one\n       came from the base env at its older pinned "
                   "version. Rebuild\n       the overlay with it added:\n"
-                  '         QWEN_OVERLAY_PKGS="diffusers>=0.35 transformers>=4.51 \\\n'
+                  '         QWEN_OVERLAY_PKGS="diffusers>=0.36 transformers>=4.51 \\\n'
                   '             tokenizers huggingface_hub>=0.27 safetensors '
                   'accelerate" \\\n'
                   "             bash scripts/pipeline/00_setup_qwen_env.sh --overlay",

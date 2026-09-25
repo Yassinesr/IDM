@@ -44,6 +44,11 @@ fi
 export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
 export TORCH_HOME="$IDM_ROOT/torch"
 export PIP_CACHE_DIR="$IDM_ROOT/pipcache"
+
+# Only the Qwen stages act on this: they put it first on sys.path themselves,
+# inside _qwen.import_diffusers(). Stages 20 and 30 import diffusers normally
+# and still get the pinned 0.25.0, so exporting it here cannot reach them.
+[ -d "$IDM_ROOT/qwen-overlay" ] && export QWEN_OVERLAY="$IDM_ROOT/qwen-overlay"
 export XDG_CACHE_HOME="$IDM_ROOT/cache"
 
 # Alaya NeW sits behind the Great Firewall: huggingface.co is not routable from

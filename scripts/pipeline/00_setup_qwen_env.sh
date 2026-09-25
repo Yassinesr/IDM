@@ -47,7 +47,7 @@ if [ "$MODE" = "overlay" ]; then
     # DDUFEntry, added in 0.27. Overriding it is safe because the overlay is
     # only on sys.path when QWEN_OVERLAY is set - stages 20 and 30 still see
     # the pinned 0.25.2.
-    PKGS="${QWEN_OVERLAY_PKGS:-diffusers>=0.35 transformers>=4.51 tokenizers huggingface_hub>=0.27 safetensors accelerate}"
+    PKGS="${QWEN_OVERLAY_PKGS:-diffusers>=0.36 transformers>=4.51 tokenizers huggingface_hub>=0.27 safetensors accelerate}"
     # shellcheck disable=SC2086
     pip install --target "$OVERLAY" --upgrade --no-deps $PKGS
     echo
@@ -63,7 +63,7 @@ Use it by exporting QWEN_OVERLAY - no second env to activate:
 If an import fails naming a symbol the base env's older copy lacks, that
 package needs adding to the overlay too:
 
-    QWEN_OVERLAY_PKGS="diffusers>=0.35 transformers>=4.51 tokenizers \
+    QWEN_OVERLAY_PKGS="diffusers>=0.36 transformers>=4.51 tokenizers \
         huggingface_hub>=0.27 safetensors accelerate <the-missing-one>" \
         bash scripts/pipeline/00_setup_qwen_env.sh --overlay
 
@@ -141,7 +141,7 @@ python -c 'import torch' 2>/dev/null \
 
 # Deliberately unpinned: this env exists to track current diffusers, which is
 # exactly what the IDM-VTON env cannot do.
-pip install --upgrade "diffusers>=0.35" transformers accelerate safetensors \
+pip install --upgrade "diffusers>=0.36" transformers accelerate safetensors \
     sentencepiece protobuf pillow
 
 python - <<'PY'

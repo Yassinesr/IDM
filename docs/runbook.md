@@ -256,7 +256,43 @@ bash scripts/pipeline/00_setup_qwen_env.sh
 
 ### If it does not fit
 
-Two ways out.
+On a 49 GB disk holding 31 GB of weights, two complete torch stacks do not fit.
+Three ways out, best first.
+
+**One torch, shared.** The reason for two environments is a version floor, not
+two different torches: IDM-VTON is pinned to `diffusers==0.25.0`, and
+`QwenImageEditPlusPipeline` needs diffusers ≥ 0.36, which touches `torch.xpu`
+at import and so needs torch ≥ 2.4. Nothing in `requirements.txt` caps torch —
+the default 2.0.1 was chosen for an index that carried it. Build the IDM-VTON
+env on 2.4.1 and Qwen needs only the newer *libraries* on top, installed with
+`pip --target` into a directory the Qwen stages put first on `sys.path`:
+
+```bash
+IDM_ALLOW_EPHEMERAL=1 bash scripts/alaya/bootstrap_all.sh --single-torch
+```
+
+About 7.5 GB instead of 13.2, which is the difference between fitting and not.
+`env.sh` exports `QWEN_OVERLAY` whenever the directory exists, so nothing needs
+activating separately — stages 20 and 30 import diffusers normally and still
+get the pinned 0.25.0, because only `_qwen.import_diffusers()` puts the overlay
+on the path.
+
+**Verify the IDM side before relying on it.** `diffusers==0.25.0` and
+`transformers==4.36.2` are from late 2023 and torch 2.4.1 is from mid-2024;
+that pairing is plausible but not something this repo has proven. Run preflight
+and one try-on before going further:
+
+```bash
+source scripts/alaya/env.sh
+python scripts/alaya/preflight.py
+python scripts/alaya/demo_single.py --category lower_body \
+    --human gradio_demo/example/human/model_front.jpg \
+    --garment gradio_demo/example/cloth/yoga_pants.jpg \
+    --desc "plain mauve leggings"
+```
+
+If that breaks, rebuild on the default torch — `TORCH_VERSION=2.0.1` — and take
+one of the other two routes.
 
 **Put it on another mount.** If some other filesystem has room:
 
@@ -267,6 +303,9 @@ QWEN_VENV=/some/mount/venv-qwen bash scripts/pipeline/00_setup_qwen_env.sh
 Treat that mount as scratch — a venv rebuilds from a script, so it is the right
 thing to put somewhere you do not fully trust. Never the weights, never
 `work/`.
+
+Read-only mounts do not count: `/root/public` and, on this cluster,
+`/anc-init` are both read-only however much space they report.
 
 **Or swap the environments.** The stages never run at the same time, so the two
 envs never have to coexist:
@@ -294,7 +333,13 @@ IDM_VENV=$IDM_ROOT/venv-qwen idm_activate
 python -c 'import torch,diffusers;print(torch.__version__, diffusers.__version__, torch.cuda.is_available())'
 ```
 
-Want torch ≥ 2.4, diffusers ≥ 0.36, `True`.
+Want torch ≥ 2.4, diffusers ≥ 0.36, `True`. It now says why it failed rather
+than leaving you with `python: command not found` — the usual causes are
+`IDM_ROOT` unset in a new shell, or the environment never having been built.
+
+With `--single-torch` there is nothing to activate: `source scripts/alaya/env.sh`
+is the whole of it, and the same check should print diffusers ≥ 0.36 because
+`QWEN_OVERLAY` is on the path.
 
 ---
 
