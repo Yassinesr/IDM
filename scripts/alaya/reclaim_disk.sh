@@ -126,8 +126,13 @@ else
     echo "a cache that regenerates on demand."
 fi
 
-# The reason anyone runs this script: is there room for the Qwen env?
-NEED=$((8 * 1024 * 1024 * 1024))
+# The reason anyone runs this script: is there room to build an environment?
+# 8 GB installed was the old figure and it was the wrong one - pip unpacks each
+# wheel under TMPDIR before installing it, and torch is ~2.5 GB unpacked, so
+# the peak is what has to fit. One shared environment (bootstrap_all.sh
+# --single-torch) peaks around 10 GB; a second, separate torch stack on top of
+# an existing env peaks around 11.
+NEED=$((10 * 1024 * 1024 * 1024))
 if [ "$APPLY" = "1" ]; then
     PROJ="$(df -B1 --output=avail / 2>/dev/null | tail -1 | tr -dc '0-9')"
 else
@@ -135,14 +140,23 @@ else
 fi
 echo
 if [ "${PROJ:-0}" -ge "$NEED" ]; then
-    echo "That clears the ~8 GB the Qwen env needs:"
-    echo "    bash scripts/pipeline/00_setup_qwen_env.sh"
+    echo "That is enough for one shared environment (~10 GB at peak):"
+    echo "    bash scripts/alaya/bootstrap_all.sh --single-torch"
+    echo
+    echo "A second, separate torch stack needs ~11 GB on top of an existing"
+    echo "env, which is why --single-torch exists."
 else
     SHORT=$((NEED - PROJ))
-    echo "Still about $(human "$SHORT") short of the ~8 GB the Qwen env needs."
+    echo "Still about $(human "$SHORT") short of the ~10 GB an environment"
+    echo "needs at peak."
     echo
-    echo "The stages never run together - stage 10 writes PNGs that stages 20"
-    echo "and 30 read - so the two envs do not have to coexist. Swap them:"
+    echo
+    echo "First try sharing one torch instead of installing two, ~6 GB less:"
+    echo "    bash scripts/alaya/bootstrap_all.sh --single-torch"
+    echo
+    echo "If even that will not fit: the stages never run together - stage 10"
+    echo "writes PNGs that stages 20 and 30 read - so the two envs do not have"
+    echo "to coexist. Swap them:"
     echo
     echo "    $IDM_ROOT/venv/bin/pip freeze > $IDM_ROOT/idm-venv.txt   # first!"
     echo "    rm -rf $IDM_ROOT/venv"

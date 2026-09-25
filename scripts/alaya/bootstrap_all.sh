@@ -61,7 +61,21 @@ echo "IDM_ROOT $IDM_ROOT"
 # First, because everything below is wasted if it does not persist.
 if [ "$SKIP_STORAGE" = "0" ]; then
     step "1/5  storage"
-    bash scripts/alaya/check_storage.sh || fail "storage check (see §2.1.1)"
+    # 00_bootstrap_workshop.sh and preflight.py both take IDM_ALLOW_EPHEMERAL=1
+    # as the user having decided; this stage did not, so setting it correctly
+    # everywhere still stopped here. The check is worth running either way -
+    # it is the only thing that prints the mount table - but on a box with no
+    # PVC to attach, refusing to continue is refusing the only option there is.
+    if bash scripts/alaya/check_storage.sh; then
+        :
+    elif [ "${IDM_ALLOW_EPHEMERAL:-0}" = "1" ]; then
+        echo >&2
+        echo "WARNING: no persistent storage, IDM_ALLOW_EPHEMERAL=1 - continuing." >&2
+        echo "         Everything below dies if this container is RELEASED (释放)." >&2
+        echo "         Shut it down (关机) instead and it survives." >&2
+    else
+        fail "storage check - or set IDM_ALLOW_EPHEMERAL=1 to accept the loss"
+    fi
     FREE_GB="$(df -BG --output=avail "$IDM_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')"
     echo "free on $IDM_ROOT: ${FREE_GB:-?} GB"
     NEED=60
