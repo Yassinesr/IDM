@@ -17,6 +17,18 @@ idm_activate() {
         PATH="$IDM_VENV/bin:$PATH"; export PATH
         return 0
     fi
+    # Say why. env.sh prints the remedy on a failed return, but this is also
+    # called directly - `IDM_VENV=... idm_activate` - and a bare non-zero
+    # return there surfaces later as "python: command not found", which points
+    # at the wrong thing entirely.
+    if [ -z "${IDM_VENV:-}" ]; then
+        echo "[activate] IDM_VENV is empty - is IDM_ROOT set?" >&2
+    elif [ ! -d "$IDM_VENV" ]; then
+        echo "[activate] no such environment: $IDM_VENV" >&2
+    else
+        echo "[activate] $IDM_VENV exists but is not an environment:" >&2
+        echo "           no bin/activate and no conda-meta/" >&2
+    fi
     return 1
 }
 
