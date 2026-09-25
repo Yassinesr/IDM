@@ -80,16 +80,38 @@ echo "==> target: $QWEN_VENV"
 # bought for a reinstall that will never happen on a container this size.
 export PIP_NO_CACHE_DIR=1
 
-FREE_GB="$(df -BG --output=avail "$IDM_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9')"
-echo "==> free on $IDM_ROOT: ${FREE_GB:-?} GB (pip caching disabled)"
-if [ -n "${FREE_GB:-}" ] && [ "$FREE_GB" -lt 10 ]; then
+# pip unpacks each wheel under TMPDIR before installing it, and torch is ~2.5 GB
+# unpacked. TMPDIR defaults to /tmp, which on this box is the same filesystem as
+# everything else - so with QWEN_VENV pointed at a roomier mount, the install
+# would still fail against / unless the scratch space follows it there.
+QWEN_PARENT="$(dirname "$QWEN_VENV")"
+mkdir -p "$QWEN_PARENT" || { echo "ERROR: cannot create $QWEN_PARENT" >&2; exit 1; }
+if [ -z "${TMPDIR:-}" ]; then
+    TMPDIR="$QWEN_PARENT/tmp-qwen-build"
+    mkdir -p "$TMPDIR" && export TMPDIR \
+        || { echo "ERROR: cannot create $TMPDIR" >&2; exit 1; }
+    # Leaving several GB of unpacked wheels behind on a full disk would be a
+    # poor thanks for the space.
+    trap 'rm -rf "$TMPDIR"' EXIT
+fi
+
+# Measure the filesystem the env is actually going on, which is not IDM_ROOT's
+# whenever QWEN_VENV has been pointed elsewhere.
+FREE_GB="$(df -BG --output=avail "$QWEN_PARENT" 2>/dev/null | tail -1 | tr -dc '0-9')"
+echo "==> free on $QWEN_PARENT: ${FREE_GB:-?} GB (pip caching disabled)"
+echo "==> build scratch: $TMPDIR"
+if [ -n "${FREE_GB:-}" ] && [ "$FREE_GB" -lt 12 ]; then
     echo >&2
-    echo "WARNING: this env lands at roughly 8 GB - torch and its bundled CUDA" >&2
-    echo "         libraries are nearly all of it. The Qwen weights themselves" >&2
-    echo "         cost nothing; they are read off /root/public in place." >&2
-    echo "         If the install dies with ENOSPC, stop and run:" >&2
-    echo "             bash scripts/alaya/reclaim_disk.sh" >&2
-    echo "         which reports what is cache and what is not." >&2
+    echo "WARNING: only ${FREE_GB} GB here. The env lands at roughly 8 GB, and" >&2
+    echo "         pip needs a few GB more while it unpacks torch, so 12 GB is" >&2
+    echo "         the realistic floor. The Qwen weights cost nothing - they" >&2
+    echo "         are read off /root/public in place - but this is not free." >&2
+    echo "         If it dies with ENOSPC:" >&2
+    echo "           rm -rf $QWEN_VENV          # the partial install" >&2
+    echo "           bash scripts/alaya/reclaim_disk.sh" >&2
+    echo "         or put it on a mount with room:" >&2
+    echo "           QWEN_VENV=/other/mount/venv-qwen \\" >&2
+    echo "             bash scripts/pipeline/00_setup_qwen_env.sh" >&2
     echo >&2
 fi
 
