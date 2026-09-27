@@ -90,6 +90,21 @@ if [ -z "${QWEN_OVERLAY:-}" ]; then
     exit 1
 fi
 
+# env.sh exports QWEN_OVERLAY when the directory exists, which a half-built
+# overlay also satisfies. Import from it now rather than several minutes in.
+if ! python -c "
+import os, sys
+sys.path.insert(0, os.environ['QWEN_OVERLAY'])
+import diffusers
+from diffusers import QwenImageEditPlusPipeline
+" 2>/dev/null; then
+    echo "ERROR: \$QWEN_OVERLAY is set but does not import." >&2
+    echo "       Rebuild it and read what it reports:" >&2
+    echo "         rm -rf \$QWEN_OVERLAY" >&2
+    echo "         bash scripts/pipeline/00_setup_qwen_env.sh --overlay" >&2
+    exit 1
+fi
+
 for f in "$REFERENCE" "$GARMENT"; do
     [ -f "$f" ] || { echo "ERROR: $f not found" >&2; exit 1; }
 done

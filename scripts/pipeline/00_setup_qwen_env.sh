@@ -47,7 +47,12 @@ if [ "$MODE" = "overlay" ]; then
     # DDUFEntry, added in 0.27. Overriding it is safe because the overlay is
     # only on sys.path when QWEN_OVERLAY is set - stages 20 and 30 still see
     # the pinned 0.25.2.
-    PKGS="${QWEN_OVERLAY_PKGS:-diffusers>=0.36 transformers>=4.51 tokenizers huggingface_hub>=0.27 safetensors accelerate}"
+    # huggingface_hub is capped below 1.0 on purpose. The overlay needs >= 0.27
+    # for DDUFEntry, but 1.x replaced the requests-based downloader with one
+    # that imports httpx2 - a dependency --no-deps will not install and whose
+    # own transitive chain would then have to be named here too. Everything
+    # below 1.0 uses the requests stack the base env already has.
+    PKGS="${QWEN_OVERLAY_PKGS:-diffusers>=0.36 transformers>=4.51 tokenizers huggingface_hub>=0.27,<1.0 safetensors accelerate}"
     # shellcheck disable=SC2086
     pip install --target "$OVERLAY" --upgrade --no-deps $PKGS
     echo
@@ -69,10 +74,28 @@ from diffusers import QwenImageEditPlusPipeline  # noqa: F401
 print("    QwenImageEditPlusPipeline available")
 PYCHECK
     then
-        echo >&2
-        echo "ERROR: the overlay does not import. It is at $OVERLAY;" >&2
-        echo "       delete it and re-run, or add whatever the error named to" >&2
-        echo "       QWEN_OVERLAY_PKGS (see below)." >&2
+        cat >&2 <<'WHY'
+
+ERROR: the overlay does not import.
+
+  --no-deps is deliberate: resolving normally would pull in torch and undo the
+  whole point of an overlay. The cost is that every transitive dependency has
+  to be named here, and a ModuleNotFoundError above is one that was not.
+
+  Two ways to fix it, and the second is usually right:
+
+    1. Name the missing package, if it is small and pure-python:
+         QWEN_OVERLAY_PKGS="<the current list> <the-missing-one>" \
+             bash scripts/pipeline/00_setup_qwen_env.sh --overlay
+
+    2. Cap whichever package pulled it in, so an older release that needs
+       only what the base env already has gets installed instead. That is
+       why huggingface_hub is pinned <1.0 here: 1.x wants httpx2.
+
+  Then delete the overlay and rebuild:
+    rm -rf OVERLAY_PATH
+WHY
+        echo "    (that path is $OVERLAY)" >&2
         exit 1
     fi
 
