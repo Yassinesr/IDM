@@ -69,28 +69,101 @@ if [ "$MODE" = "overlay" ]; then
     [ -n "$PIP_INDEX_URL" ] && export PIP_INDEX_URL
     export PIP_NO_CACHE_DIR=1
 
-    if [ ! -f "$QWEN_ENV/pyvend.marker" ]; then
+    if [ ! -f "$QWEN_ENV/pyvenv.cfg" ]; then
         rm -rf "$QWEN_ENV"
         echo "==> creating $QWEN_ENV (--system-site-packages)"
         python -m venv --system-site-packages "$QWEN_ENV" \
             || { echo "ERROR: could not create $QWEN_ENV" >&2; exit 1; }
-        touch "$QWEN_ENV/pyvend.marker"
     fi
-
-    PKGS="${QWEN_OVERLAY_PKGS:-diffusers>=0.36 transformers>=4.51 accelerate safetensors}"
-    echo "==> installing (deps resolved normally; torch already satisfied)"
-    # shellcheck disable=SC2086
-    "$QWEN_ENV/bin/pip" install --upgrade $PKGS || {
-        echo "ERROR: install failed. If it ran out of space:" >&2
-        echo "         bash scripts/alaya/reclaim_disk.sh --yes" >&2
-        exit 1; }
 
     SITE="$("$QWEN_ENV/bin/python" -c 'import site;print(site.getsitepackages()[0])')"
     [ -d "$SITE" ] || { echo "ERROR: cannot locate site-packages in $QWEN_ENV" >&2; exit 1; }
 
+    # Import from the base interpreter with SITE first on sys.path - the exact
+    # arrangement the stages use, so a pass here means they will work.
+    overlay_imports() {
+        QWEN_OVERLAY="$SITE" python - <<'PYCHECK'
+import os, sys
+sys.path.insert(0, os.environ["QWEN_OVERLAY"])
+import torch, diffusers, transformers
+if tuple(int(x) for x in diffusers.__version__.split(".")[:2]) < (0, 36):
+    sys.exit("diffusers < 0.36 has no QwenImageEditPlusPipeline")
+from transformers.utils import is_torch_available
+if not is_torch_available():
+    sys.exit(f"transformers {transformers.__version__} disabled torch "
+             f"{torch.__version__} - it wants a newer one")
+from diffusers import QwenImageEditPlusPipeline  # noqa: F401
+print(f"    torch        {torch.__version__}  (from the base env)")
+print(f"    diffusers    {diffusers.__version__}")
+print(f"    transformers {transformers.__version__}")
+print("    QwenImageEditPlusPipeline available")
+PYCHECK
+    }
+
+    # Newer is not better here. diffusers 0.40 registers a custom op whose
+    # annotations torch 2.4's infer_schema cannot parse, and transformers 5.x
+    # disables torch outright below 2.5 - both are "works on a newer torch"
+    # problems, and the base torch is fixed by IDM-VTON. So walk UP from the
+    # oldest release that has QwenImageEditPlusPipeline and stop at the first
+    # that imports, rather than guessing which pairing is good.
+    if [ -n "${QWEN_OVERLAY_PKGS:-}" ]; then
+        echo "==> installing (QWEN_OVERLAY_PKGS override, no probing)"
+        # shellcheck disable=SC2086
+        "$QWEN_ENV/bin/pip" install --upgrade $QWEN_OVERLAY_PKGS \
+            || { echo "ERROR: install failed" >&2; exit 1; }
+        overlay_imports || { echo "ERROR: the override does not import." >&2; exit 1; }
+    else
+        TF_SPEC="${QWEN_TRANSFORMERS_SPEC:-transformers>=4.51,<5}"
+        MINORS="${QWEN_DIFFUSERS_MINORS:-36 37 38 39 40}"
+        OK=0
+        for m in $MINORS; do
+            SPEC="diffusers>=0.$m,<0.$((m + 1))"
+            echo
+            echo "==> trying $SPEC with $TF_SPEC"
+            PIPLOG="$(mktemp)"
+            if ! "$QWEN_ENV/bin/pip" install --upgrade \
+                    "$SPEC" "$TF_SPEC" accelerate safetensors >"$PIPLOG" 2>&1; then
+                # Quiet by design - most failures here are just "no such
+                # release" while probing. But a real one (no disk, no network)
+                # would otherwise be indistinguishable, so show it.
+                echo "    install failed:"
+                tail -3 "$PIPLOG" | sed 's/^/      /'
+                rm -f "$PIPLOG"
+                continue
+            fi
+            rm -f "$PIPLOG"
+            if overlay_imports; then OK=1; break; fi
+            echo "    that pairing does not import on torch $BASE_TORCH"
+        done
+        if [ "$OK" != "1" ]; then
+            cat >&2 <<'WHY'
+
+ERROR: no diffusers release in the probed range imports on this torch.
+
+  Every candidate either predates QwenImageEditPlusPipeline or needs a torch
+  newer than the base environment's. The base torch is set by IDM-VTON, which
+  is pinned to diffusers 0.25.0, so raising it is not free.
+
+  Options, in order:
+
+    1. Widen the probe, if a newer diffusers might work:
+         QWEN_DIFFUSERS_MINORS="36 37 38 39 40 41" \
+             bash scripts/pipeline/00_setup_qwen_env.sh --overlay
+
+    2. Name an exact pairing you know works:
+         QWEN_OVERLAY_PKGS="diffusers==0.36.0 transformers==4.51.3 \
+             accelerate safetensors" \
+             bash scripts/pipeline/00_setup_qwen_env.sh --overlay
+
+    3. Give Qwen its own torch - a full second environment, ~8 GB:
+         bash scripts/pipeline/00_setup_qwen_env.sh
+WHY
+            exit 1
+        fi
+    fi
+
     # If pip put torch in here, --system-site-packages did not take effect and
-    # ~6 GB just landed on a disk that has none to spare. Say so before it is
-    # mistaken for a working install.
+    # ~6 GB just landed on a disk that has none to spare.
     if [ -d "$SITE/torch" ]; then
         echo >&2
         echo "ERROR: torch was installed into the overlay - the base env's copy" >&2
@@ -100,42 +173,9 @@ if [ "$MODE" = "overlay" ]; then
     fi
 
     ln -sfn "$SITE" "$OVERLAY"
+    echo
     echo "    $(du -sh "$SITE" | cut -f1) installed"
     echo "    $OVERLAY -> $SITE"
-
-    echo "==> verifying the overlay imports"
-    if ! QWEN_OVERLAY="$OVERLAY" python - <<'PYCHECK'
-import os, sys
-sys.path.insert(0, os.environ["QWEN_OVERLAY"])
-import torch, diffusers, transformers
-print(f"    torch        {torch.__version__}  (from the base env)")
-print(f"    diffusers    {diffusers.__version__}")
-print(f"    transformers {transformers.__version__}")
-if tuple(int(x) for x in diffusers.__version__.split(".")[:2]) < (0, 36):
-    sys.exit("    ERROR: QwenImageEditPlusPipeline needs diffusers >= 0.36")
-from diffusers import QwenImageEditPlusPipeline  # noqa: F401
-print("    QwenImageEditPlusPipeline available")
-PYCHECK
-    then
-        cat >&2 <<'WHY'
-
-ERROR: the overlay does not import.
-
-  Dependencies are resolved normally here, so a missing module is not the
-  usual cause any more - more likely a version conflict between what the
-  overlay installed and what the base env provides.
-
-  The traceback above names it. Pin that package in QWEN_OVERLAY_PKGS:
-
-    QWEN_OVERLAY_PKGS="diffusers>=0.36 transformers>=4.51 accelerate \
-        safetensors <the-one-to-pin>==<version>" \
-        bash scripts/pipeline/00_setup_qwen_env.sh --overlay
-
-  Delete the environment first so the rebuild is clean:
-WHY
-        echo "    rm -rf $QWEN_ENV $OVERLAY" >&2
-        exit 1
-    fi
 
     cat <<EOF
 
