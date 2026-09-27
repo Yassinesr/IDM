@@ -156,7 +156,9 @@ def load_pipeline(model_dir, offload=False):
     # from_pretrained on a local dir reads model_index.json and builds whatever
     # pipeline class it names - so this does not hard-code a class that may be
     # renamed between Qwen releases.
-    print("loading (54 GB off the shared mount; first load is slow)")
+    # ~33s measured with the page cache warm from an earlier stage; a cold
+    # read off CephFS is slower.
+    print("loading (54 GB off the shared mount)")
     pipe = DiffusionPipeline.from_pretrained(
         str(model_dir), torch_dtype=torch.bfloat16, local_files_only=True)
     print(f"    pipeline: {type(pipe).__name__}")

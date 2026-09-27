@@ -431,8 +431,9 @@ Other flags: `--repeat K` for K seeds within each pose, `--guidance` (maps to
 /`--height`, `--offload` for cards under 80 GB, `--prompt` to replace the whole
 table with one text.
 
-First load pulls 54 GB off CephFS, so expect minutes of silence before the
-first step counter moves.
+First load pulls 54 GB off CephFS. Measured at 33s with the page cache warm
+from an earlier stage; a genuinely cold read is slower, so do not be alarmed
+by a quiet minute or two before the first step counter moves.
 
 ### Extending a crop into a full-body model
 
@@ -608,10 +609,26 @@ python scripts/pipeline/20_leg_masks.py --in-dir work/variants-lower \
     --out-dir work/masks-idm --overlay
 ```
 
-Then open `work/masks-qwen/*.overlay.png` beside `work/masks-idm/*.overlay.png`.
-Speed is the easy half of the answer; the overlays are the half that decides
-it. Expect the parser to win on edge accuracy wherever it produces anything at
-all, and Qwen to win wherever the parser returns nothing.
+Measured on an H100 80GB, one pose across five models, 768×1024:
+
+| | Qwen-Image-Edit | IDM-VTON parser |
+|---|---|---|
+| load | 33.4s | 2.9s |
+| per image | 26.30s (26.17–26.74) | 4.47s (2.66–8.29) |
+| 5 images | 131.5s | 22.3s |
+| wall clock | 164.9s | 25.3s |
+
+**The parser is ~6× faster per image, and likely ~9× in steady state.** Its
+spread is 3× because the first image carries CUDA and ONNX-session warmup;
+later ones land near 2.7s. Qwen's spread is 0.6s because a 40-step diffusion
+loop does the same work every time — which also means it scales linearly, so
+100 images is 44 minutes against about 5.
+
+So the parser is the default, and Qwen is for what it cannot read. That is what
+the `_unsegmented.txt` handoff already does. Speed alone does not settle it,
+though: open `work/masks-qwen/*.overlay.png` beside
+`work/masks-idm/*.overlay.png` and judge the edges, because the parser's follow
+real pixels and Qwen's are generated.
 
 ## 9. Stage 30 — try-on across all views
 
