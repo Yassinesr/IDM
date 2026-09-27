@@ -48,6 +48,44 @@ def supported(fn, wanted: dict) -> dict:
     return keep
 
 
+def torch_version():
+    import torch
+    return tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2])
+
+
+def install_torch_compat():
+    """Close the one gap between diffusers >= 0.36 and torch 2.4.
+
+    diffusers' native attention backend passes enable_gqa= to
+    scaled_dot_product_attention, which torch added in 2.5. On 2.4 that is a
+    TypeError deep in the first denoising step, long after the 54 GB load.
+
+    enable_gqa=False is exactly what torch 2.4 does anyway, so dropping it is
+    not a behaviour change. enable_gqa=True would be, so that raises instead of
+    being silently ignored.
+    """
+    import torch
+    import torch.nn.functional as F
+    if torch_version() >= (2, 5):
+        return
+    original = F.scaled_dot_product_attention
+    if getattr(original, "_gqa_shim", False):
+        return
+
+    def sdpa(*args, enable_gqa=False, **kwargs):
+        if enable_gqa:
+            raise NotImplementedError(
+                f"enable_gqa=True needs torch >= 2.5; this env has "
+                f"{torch.__version__}. Rebuild the base env on a newer torch: "
+                "TORCH_VERSION=2.5.1 bash scripts/alaya/00_bootstrap_workshop.sh")
+        return original(*args, **kwargs)
+
+    sdpa._gqa_shim = True
+    F.scaled_dot_product_attention = sdpa
+    print(f"          (scaled_dot_product_attention shimmed for torch "
+          f"{torch.__version__}: no enable_gqa)")
+
+
 def import_diffusers():
     """Import diffusers, honouring QWEN_OVERLAY, or explain the version floor.
 
@@ -65,6 +103,9 @@ def import_diffusers():
             return None
         sys.path.insert(0, overlay)
         print(f"overlay   {overlay} (shadowing the env's diffusers/transformers)")
+
+    # Before diffusers, so the patched function is the one its modules resolve.
+    install_torch_compat()
 
     try:
         import diffusers

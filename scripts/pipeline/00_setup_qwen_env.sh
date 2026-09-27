@@ -81,11 +81,21 @@ if [ "$MODE" = "overlay" ]; then
 
     # Import from the base interpreter with SITE first on sys.path - the exact
     # arrangement the stages use, so a pass here means they will work.
+    # Goes through _qwen.py, so this tests the arrangement the stages actually
+    # use - including the compatibility shims it installs - rather than a
+    # simplified version of it.
     overlay_imports() {
-        QWEN_OVERLAY="$SITE" python - <<'PYCHECK'
+        QWEN_OVERLAY="$SITE" REPO_DIR="$REPO_DIR" python - <<'PYCHECK'
 import os, sys
-sys.path.insert(0, os.environ["QWEN_OVERLAY"])
-import torch, diffusers, transformers
+sys.path.insert(0, os.path.join(os.environ["REPO_DIR"], "scripts", "pipeline"))
+import _qwen
+
+imported = _qwen.import_diffusers()
+if imported is None:
+    sys.exit("diffusers did not import")
+diffusers, _ = imported
+
+import torch, transformers
 if tuple(int(x) for x in diffusers.__version__.split(".")[:2]) < (0, 36):
     sys.exit("diffusers < 0.36 has no QwenImageEditPlusPipeline")
 from transformers.utils import is_torch_available
@@ -93,9 +103,22 @@ if not is_torch_available():
     sys.exit(f"transformers {transformers.__version__} disabled torch "
              f"{torch.__version__} - it wants a newer one")
 from diffusers import QwenImageEditPlusPipeline  # noqa: F401
+
+# Importing is not running. The attention backend is where a diffusers built
+# for a newer torch actually breaks - enable_gqa= landed in 2.5 - and that
+# failure otherwise appears in the first denoising step, after the 54 GB load.
+# Four tiny tensors settle it in milliseconds.
+from diffusers.models.attention_dispatch import dispatch_attention_fn
+dev = "cuda" if torch.cuda.is_available() else "cpu"
+q = torch.randn(1, 2, 8, 16, device=dev, dtype=torch.float32)
+out = dispatch_attention_fn(q, q.clone(), q.clone())
+if out.shape != q.shape:
+    sys.exit(f"attention returned {tuple(out.shape)}, expected {tuple(q.shape)}")
+
 print(f"    torch        {torch.__version__}  (from the base env)")
 print(f"    diffusers    {diffusers.__version__}")
 print(f"    transformers {transformers.__version__}")
+print(f"    attention    runs on {dev}")
 print("    QwenImageEditPlusPipeline available")
 PYCHECK
     }
