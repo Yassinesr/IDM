@@ -31,41 +31,84 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$REPO_DIR/scripts/alaya/_activate.sh"
 
 if [ "$MODE" = "overlay" ]; then
+    # A venv used purely as an installer. --system-site-packages lets pip SEE
+    # the IDM-VTON env's torch as already satisfied, so it resolves everything
+    # else normally instead of downloading a second 6 GB torch.
+    #
+    # An earlier version used `pip install --target ... --no-deps`, which does
+    # keep torch out but makes every transitive dependency something you have
+    # to name by hand - and each one only shows up as an ImportError after the
+    # install reports success. DDUFEntry, then httpx2, then the next one.
+    # Real resolution ends that.
+    #
+    # What gets used afterwards is the venv's site-packages directory, put
+    # first on sys.path by the Qwen stages themselves. Not the venv: activating
+    # it would shadow diffusers 0.25.0 for stages 20 and 30 as well, and
+    # run_all.sh runs all of them in one process.
+    QWEN_ENV="$IDM_ROOT/qwen-env"
     OVERLAY="$IDM_ROOT/qwen-overlay"
-    echo "==> overlay mode: $OVERLAY (reusing the IDM-VTON env's torch)"
+    echo "==> overlay mode: $QWEN_ENV (reusing the IDM-VTON env's torch)"
+
     # shellcheck disable=SC1091
     source "$REPO_DIR/scripts/alaya/env.sh" >/dev/null 2>&1 || true
     command -v python >/dev/null 2>&1 \
         || { echo "ERROR: activate the IDM-VTON env first: source scripts/alaya/env.sh" >&2; exit 1; }
-    echo "    base torch: $(python -c 'import torch;print(torch.__version__)' 2>/dev/null || echo MISSING)"
-    mkdir -p "$OVERLAY"
-    [ -n "$PIP_INDEX_URL" ] && export PIP_INDEX_URL
-    # --no-deps deliberately: resolving normally would drag in torch and undo
-    # the entire point. That means every package whose version must be NEWER
-    # than the IDM-VTON env's has to be named here. huggingface_hub is one:
-    # the env pins 0.25.2 for diffusers 0.25.0, and modern diffusers needs
-    # DDUFEntry, added in 0.27. Overriding it is safe because the overlay is
-    # only on sys.path when QWEN_OVERLAY is set - stages 20 and 30 still see
-    # the pinned 0.25.2.
-    # huggingface_hub is capped below 1.0 on purpose. The overlay needs >= 0.27
-    # for DDUFEntry, but 1.x replaced the requests-based downloader with one
-    # that imports httpx2 - a dependency --no-deps will not install and whose
-    # own transitive chain would then have to be named here too. Everything
-    # below 1.0 uses the requests stack the base env already has.
-    PKGS="${QWEN_OVERLAY_PKGS:-diffusers>=0.36 transformers>=4.51 tokenizers huggingface_hub>=0.27,<1.0 safetensors accelerate}"
-    # shellcheck disable=SC2086
-    pip install --target "$OVERLAY" --upgrade --no-deps $PKGS
-    echo
-    echo "    $(du -sh "$OVERLAY" | cut -f1) installed"
+    BASE_TORCH="$(python -c 'import torch;print(torch.__version__)' 2>/dev/null || true)"
+    [ -n "$BASE_TORCH" ] || { echo "ERROR: the active env has no torch - nothing to reuse." >&2; exit 1; }
+    echo "    base torch: $BASE_TORCH"
+    case "$BASE_TORCH" in
+        1.*|2.0.*|2.1.*|2.2.*|2.3.*)
+            echo >&2
+            echo "ERROR: diffusers >= 0.34 touches torch.xpu at import, which arrived" >&2
+            echo "       in torch 2.4. This env has $BASE_TORCH, so an overlay on it" >&2
+            echo "       cannot work. Rebuild the base env on 2.4.1:" >&2
+            echo "         IDM_ALLOW_EPHEMERAL=1 bash scripts/alaya/bootstrap_all.sh --single-torch" >&2
+            exit 1 ;;
+    esac
 
-    # The full-venv path below prints its versions; this one used to exit
-    # without checking anything, so a half-installed overlay looked like a
-    # success and only failed later, inside a stage, after the model loaded.
+    [ -n "$PIP_INDEX_URL" ] && export PIP_INDEX_URL
+    export PIP_NO_CACHE_DIR=1
+
+    if [ ! -f "$QWEN_ENV/pyvend.marker" ]; then
+        rm -rf "$QWEN_ENV"
+        echo "==> creating $QWEN_ENV (--system-site-packages)"
+        python -m venv --system-site-packages "$QWEN_ENV" \
+            || { echo "ERROR: could not create $QWEN_ENV" >&2; exit 1; }
+        touch "$QWEN_ENV/pyvend.marker"
+    fi
+
+    PKGS="${QWEN_OVERLAY_PKGS:-diffusers>=0.36 transformers>=4.51 accelerate safetensors}"
+    echo "==> installing (deps resolved normally; torch already satisfied)"
+    # shellcheck disable=SC2086
+    "$QWEN_ENV/bin/pip" install --upgrade $PKGS || {
+        echo "ERROR: install failed. If it ran out of space:" >&2
+        echo "         bash scripts/alaya/reclaim_disk.sh --yes" >&2
+        exit 1; }
+
+    SITE="$("$QWEN_ENV/bin/python" -c 'import site;print(site.getsitepackages()[0])')"
+    [ -d "$SITE" ] || { echo "ERROR: cannot locate site-packages in $QWEN_ENV" >&2; exit 1; }
+
+    # If pip put torch in here, --system-site-packages did not take effect and
+    # ~6 GB just landed on a disk that has none to spare. Say so before it is
+    # mistaken for a working install.
+    if [ -d "$SITE/torch" ]; then
+        echo >&2
+        echo "ERROR: torch was installed into the overlay - the base env's copy" >&2
+        echo "       was not visible, so this is a full second stack, not an" >&2
+        echo "       overlay. Remove it:  rm -rf $QWEN_ENV" >&2
+        exit 1
+    fi
+
+    ln -sfn "$SITE" "$OVERLAY"
+    echo "    $(du -sh "$SITE" | cut -f1) installed"
+    echo "    $OVERLAY -> $SITE"
+
     echo "==> verifying the overlay imports"
     if ! QWEN_OVERLAY="$OVERLAY" python - <<'PYCHECK'
 import os, sys
 sys.path.insert(0, os.environ["QWEN_OVERLAY"])
-import diffusers, transformers
+import torch, diffusers, transformers
+print(f"    torch        {torch.__version__}  (from the base env)")
 print(f"    diffusers    {diffusers.__version__}")
 print(f"    transformers {transformers.__version__}")
 if tuple(int(x) for x in diffusers.__version__.split(".")[:2]) < (0, 36):
@@ -78,44 +121,31 @@ PYCHECK
 
 ERROR: the overlay does not import.
 
-  --no-deps is deliberate: resolving normally would pull in torch and undo the
-  whole point of an overlay. The cost is that every transitive dependency has
-  to be named here, and a ModuleNotFoundError above is one that was not.
+  Dependencies are resolved normally here, so a missing module is not the
+  usual cause any more - more likely a version conflict between what the
+  overlay installed and what the base env provides.
 
-  Two ways to fix it, and the second is usually right:
+  The traceback above names it. Pin that package in QWEN_OVERLAY_PKGS:
 
-    1. Name the missing package, if it is small and pure-python:
-         QWEN_OVERLAY_PKGS="<the current list> <the-missing-one>" \
-             bash scripts/pipeline/00_setup_qwen_env.sh --overlay
+    QWEN_OVERLAY_PKGS="diffusers>=0.36 transformers>=4.51 accelerate \
+        safetensors <the-one-to-pin>==<version>" \
+        bash scripts/pipeline/00_setup_qwen_env.sh --overlay
 
-    2. Cap whichever package pulled it in, so an older release that needs
-       only what the base env already has gets installed instead. That is
-       why huggingface_hub is pinned <1.0 here: 1.x wants httpx2.
-
-  Then delete the overlay and rebuild:
-    rm -rf OVERLAY_PATH
+  Delete the environment first so the rebuild is clean:
 WHY
-        echo "    (that path is $OVERLAY)" >&2
+        echo "    rm -rf $QWEN_ENV $OVERLAY" >&2
         exit 1
     fi
 
     cat <<EOF
 
-Use it by exporting QWEN_OVERLAY - no second env to activate:
+Done. Stages 10, 25 and 35 use this; stages 20 and 30 use the base env's
+pinned diffusers 0.25.0, untouched. env.sh exports QWEN_OVERLAY when the
+symlink exists, so there is nothing to activate:
 
     source scripts/alaya/env.sh
-    export QWEN_OVERLAY=$OVERLAY
     python scripts/pipeline/10_generate_views.py --reference ... --count 3
 
-If an import fails naming a symbol the base env's older copy lacks, that
-package needs adding to the overlay too:
-
-    QWEN_OVERLAY_PKGS="diffusers>=0.36 transformers>=4.51 tokenizers \
-        huggingface_hub>=0.27 safetensors accelerate <the-missing-one>" \
-        bash scripts/pipeline/00_setup_qwen_env.sh --overlay
-
-If Qwen refuses to run on this torch, that is the trade-off of overlay mode;
-the full venv (no --overlay) is the clean answer once there is disk for it.
 EOF
     exit 0
 fi

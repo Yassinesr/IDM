@@ -109,7 +109,7 @@ echo
 echo "== kept (expensive to rebuild - delete only deliberately) =="
 [ -d "$HF" ] && printf '  %-34s %8s   model weights, re-download\n' \
     "$HF" "$(human "$(size_of "$HF")")"
-for v in "$IDM_ROOT/venv" "$IDM_ROOT/venv-qwen"; do
+for v in "$IDM_ROOT/venv" "$IDM_ROOT/venv-qwen" "$IDM_ROOT/qwen-env"; do
     [ -d "$v" ] && printf '  %-34s %8s   rebuilt from requirements.txt\n' \
         "$v" "$(human "$(size_of "$v")")"
 done
