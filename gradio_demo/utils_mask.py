@@ -37,7 +37,20 @@ def hole_fill(img):
     dst = cv2.bitwise_or(img_copy, img_inverse)
     return dst
 
-def refine_mask(mask):
+def refine_mask(mask, keep_ratio=0.1):
+    """Drop speckle, keep every region that is actually part of the garment.
+
+    This used to keep only the single largest contour, which assumes the
+    inpaint region is connected. For 'upper_body' it is - the torso is one
+    blob. For 'lower_body' it is not, whenever the upper garment separates the
+    two legs: a tunic or an oversized tee over leggings leaves left and right
+    as separate components, and keeping only the larger one dropped a whole leg
+    from the mask, so the garment was painted onto one side of the model.
+
+    keep_ratio is against the largest contour, so genuine speckle (a few
+    stray parse pixels, orders of magnitude smaller) still goes, while a second
+    leg - comparable in area to the first - stays.
+    """
     contours, hierarchy = cv2.findContours(mask.astype(np.uint8),
                                            cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_L1)
     area = []
@@ -46,8 +59,10 @@ def refine_mask(mask):
         area.append(abs(a_d))
     refine_mask = np.zeros_like(mask).astype(np.uint8)
     if len(area) != 0:
-        i = area.index(max(area))
-        cv2.drawContours(refine_mask, contours, i, color=255, thickness=-1)
+        biggest = max(area)
+        for j, a in enumerate(area):
+            if a >= keep_ratio * biggest:
+                cv2.drawContours(refine_mask, contours, j, color=255, thickness=-1)
 
     return refine_mask
 
