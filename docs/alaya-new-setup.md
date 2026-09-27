@@ -132,9 +132,8 @@ Storage check, IDM-VTON env, checkpoints, preflight, Qwen env. Every stage is
 skippable (`--skip-weights` and friends) and re-runnable, so a failure part-way
 means fixing that one thing and running it again.
 
-The clone needs the SSH key set up first — `sync_from_github.sh` (§2.2.2) does
-that, or copy `~/.ssh/id_ed25519` across from the old container before you
-release it.
+The clone needs an SSH key on the box first (§2.2.2) — generate one, or copy
+`~/.ssh/id_ed25519` across from the old container before you release it.
 
 ---
 
@@ -406,31 +405,36 @@ Beijing egress blocks HTTPS to github.com, and usually SSH on port 22 as well.
 GitHub also serves SSH on **port 443**, which normally survives:
 
 ```bash
-bash scripts/alaya/sync_from_github.sh            # set up, fetch, show the plan
-bash scripts/alaya/sync_from_github.sh --force    # apply it
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+cat >> ~/.ssh/config <<'EOF'
+Host github.com
+    HostName ssh.github.com
+    Port 443
+    User git
+EOF
+
+# a key, if this container has none
+ssh-keygen -t ed25519 -C "alaya-$(hostname)" -N "" -f ~/.ssh/id_ed25519
+cat ~/.ssh/id_ed25519.pub     # add at https://github.com/settings/keys
+
+ssh -T git@github.com         # expect "successfully authenticated"
+git remote set-url origin git@github.com:Yassinesr/IDM.git
+git pull
 ```
 
-First run generates an ed25519 key, prints the public half and stops — add it to
-GitHub (account key, or a repo deploy key if you want it scoped) and run it
-again. After that it is one command per update.
+Verify the host key against GitHub's published ed25519 fingerprint rather than
+trusting whatever answers — on a network that interferes with traffic by
+design, blind trust-on-first-use is the wrong default:
 
-It verifies GitHub's host key against the published ed25519 fingerprint rather
-than trusting whatever answers, and refuses to continue on a mismatch. On a
-network that interferes with traffic by design, blind trust-on-first-use is the
-wrong default.
+```
+SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU
+```
 
-**The reset will not eat your data.** `--force` does `reset --hard` plus
-`git clean`, but excludes `work/`, `out/`, `results/`, `variants/`, `masks/` and
-any loose `*.png`/`*.jpg` — so scp'd photos and pipeline outputs survive while
-genuine junk goes. Without `--force` it only prints what it would remove, and
-warns if local commits would be discarded.
-
-Downloaded checkpoints are handled separately, because they need to be:
-`ckpt/*` is **tracked** as placeholders, and `reset --hard` restores tracked
-files regardless of clean excludes. The script moves real checkpoints aside
-before the reset and back afterwards. Without that, a sync silently replaces
-~950 MB of weights with `put X here`, and the next run fails deep inside
-onnxruntime with `INVALID_PROTOBUF` — a long way from the cause.
+**Do not `reset --hard` on this checkout.** `ckpt/*` is **tracked** as
+byte-sized placeholders, and a reset restores tracked files regardless of any
+clean excludes — silently replacing ~950 MB of weights with `put X here`. The
+next run then fails deep inside onnxruntime with `INVALID_PROTOBUF`, a long way
+from the cause. Recover with `python scripts/alaya/01_download_checkpoints.py`.
 
 If port 443 is blocked too, fall back to the bundle route (§2.2.1) — that needs
 no server egress at all.
@@ -762,7 +766,6 @@ These are real and will cost you time otherwise:
 | `scripts/alaya/bootstrap_all.sh` | fresh container → both pipelines, one command |
 | `scripts/alaya/check_storage.sh` | run first: is any mount actually persistent? |
 | `scripts/alaya/check_mount_capability.sh` | can this container mount storage itself? |
-| `scripts/alaya/sync_from_github.sh` | pull on the server over SSH on port 443, when HTTPS is blocked |
 | `scripts/alaya/bundle_for_workshop.sh` | ship the repo over SSH when GitHub is slow (macOS/Linux) |
 | `scripts/alaya/sync_from_windows.ps1` | same, from PowerShell |
 | `scripts/alaya/env.sh` | per-session env: PVC paths, caches, HF mirror |

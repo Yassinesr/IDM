@@ -138,10 +138,16 @@ git clone -b claude/alaya-new-cloud-setup-4ode4d \
 cd /pvc/idm/IDM
 ```
 
-If the clone fails because SSH is not configured yet, run
-`bash scripts/alaya/sync_from_github.sh` from a copy of the repo — it sets up
-`ssh.github.com:443`, verifies the host key against GitHub's published
-fingerprint, and fetches.
+If SSH on port 22 is blocked, GitHub also serves it on 443:
+
+```bash
+cat >> ~/.ssh/config <<'EOF'
+Host github.com
+    HostName ssh.github.com
+    Port 443
+    User git
+EOF
+```
 
 ### Make the shell remember
 
@@ -265,16 +271,19 @@ the usual cause, not a broken install.
 You cannot push from the container and you should not need to. Pull:
 
 ```bash
-bash scripts/alaya/sync_from_github.sh            # fetch + show the plan
-bash scripts/alaya/sync_from_github.sh --force    # reset and clean
-bash scripts/alaya/sync_from_github.sh --force --assets   # also example photos
+git pull
 ```
 
-`--force` does a `git reset --hard`. The script stashes any real file under
-`ckpt/` first and restores it after, because the branch tracks byte-sized
-placeholders there and a reset would otherwise drop 950 MB of checkpoints back
-to placeholder stubs. Untracked outputs (`work/`, `out/`, `*.png`, `*.jpg`) are
-preserved too.
+**One thing to know about `ckpt/`.** The branch tracks byte-sized placeholders
+there — `parsing_atr.onnx` is 25 bytes in git and 254 MB on disk — so git sees
+every downloaded checkpoint as a modified file. A plain `git pull` leaves them
+alone, but `git checkout`, `git stash` or `git reset --hard` will put the
+25-byte stub back, and the next run then fails deep inside onnxruntime with
+`INVALID_PROTOBUF`, a long way from the cause. If that happens:
+
+```bash
+python scripts/alaya/01_download_checkpoints.py
+```
 
 ---
 
@@ -712,7 +721,6 @@ source scripts/alaya/env.sh
 python scripts/alaya/preflight.py
 
 # housekeeping
-bash scripts/alaya/sync_from_github.sh [--force] [--assets]
 bash scripts/alaya/reclaim_disk.sh [--yes]
 python scripts/alaya/prune_hf_cache.py [--force]
 python scripts/alaya/find_local_models.py [dir]
@@ -750,4 +758,3 @@ python scripts/pipeline/35_qwen_tryon.py --human <img> --garment <img> --desc ".
 | `QWEN_VENV` | `$IDM_ROOT/venv-qwen` | put the Qwen env on another mount |
 | `HF_ENDPOINT` | `https://hf-mirror.com` | huggingface.co is unreachable |
 | `PIP_INDEX_URL` | Tsinghua mirror | |
-| `BRANCH` | `claude/alaya-new-cloud-setup-4ode4d` | what `sync_from_github.sh` tracks |
