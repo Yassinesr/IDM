@@ -52,6 +52,30 @@ if [ "$MODE" = "overlay" ]; then
     pip install --target "$OVERLAY" --upgrade --no-deps $PKGS
     echo
     echo "    $(du -sh "$OVERLAY" | cut -f1) installed"
+
+    # The full-venv path below prints its versions; this one used to exit
+    # without checking anything, so a half-installed overlay looked like a
+    # success and only failed later, inside a stage, after the model loaded.
+    echo "==> verifying the overlay imports"
+    if ! QWEN_OVERLAY="$OVERLAY" python - <<'PYCHECK'
+import os, sys
+sys.path.insert(0, os.environ["QWEN_OVERLAY"])
+import diffusers, transformers
+print(f"    diffusers    {diffusers.__version__}")
+print(f"    transformers {transformers.__version__}")
+if tuple(int(x) for x in diffusers.__version__.split(".")[:2]) < (0, 36):
+    sys.exit("    ERROR: QwenImageEditPlusPipeline needs diffusers >= 0.36")
+from diffusers import QwenImageEditPlusPipeline  # noqa: F401
+print("    QwenImageEditPlusPipeline available")
+PYCHECK
+    then
+        echo >&2
+        echo "ERROR: the overlay does not import. It is at $OVERLAY;" >&2
+        echo "       delete it and re-run, or add whatever the error named to" >&2
+        echo "       QWEN_OVERLAY_PKGS (see below)." >&2
+        exit 1
+    fi
+
     cat <<EOF
 
 Use it by exporting QWEN_OVERLAY - no second env to activate:
