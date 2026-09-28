@@ -1,0 +1,31 @@
+{
+  "peak_mib": 20101,
+  "resident_mib": 15469,
+  "spike_mib": 4632,
+  "samples": 126,
+  "active_samples": 45,
+  "label": "stage30",
+  "gpu_name": "NVIDIA H100 80GB HBM3",
+  "gpu_total_mib": 81559,
+  "baseline_mib": 0,
+  "seconds": 49.8,
+  "exit_code": 0,
+  "per_process": false,
+  "command": [
+    "python",
+    "scripts/pipeline/30_tryon_batch.py",
+    "--in-dir",
+    "work/variants",
+    "--limit",
+    "1",
+    "--out-dir",
+    "work/vram-probe-tryon",
+    "--garment",
+    "gradio_demo/example/cloth/yoga_pants.jpg",
+    "--desc",
+    "plain mauve high-waisted leggings",
+    "--category",
+    "lower_body"
+  ],
+  "when": "2026-09-21 19:16:26"
+}

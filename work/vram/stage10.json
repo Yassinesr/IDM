@@ -1,0 +1,25 @@
+{
+  "peak_mib": 59767,
+  "resident_mib": 32945,
+  "spike_mib": 26822,
+  "samples": 600,
+  "active_samples": 367,
+  "label": "stage10",
+  "gpu_name": "NVIDIA H100 80GB HBM3",
+  "gpu_total_mib": 81559,
+  "baseline_mib": 0,
+  "seconds": 362.9,
+  "exit_code": 0,
+  "per_process": false,
+  "command": [
+    "python",
+    "scripts/pipeline/10_generate_views.py",
+    "--reference",
+    "gradio_demo/example/human/model_front.jpg",
+    "--poses",
+    "front",
+    "--out-dir",
+    "work/vram-probe"
+  ],
+  "when": "2026-09-21 19:28:31"
+}
