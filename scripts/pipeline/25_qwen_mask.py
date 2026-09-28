@@ -6,16 +6,29 @@ Runs in the QWEN env, not the IDM-VTON one:
     IDM_VENV=$IDM_ROOT/venv-qwen idm_activate
     python scripts/pipeline/25_qwen_mask.py --from-failures work/masks/_unsegmented.txt
 
-WHAT THIS IS, HONESTLY: the mask is *generated*, not measured. Stage 20 runs a
-segmentation network trained to label body parts, and its edges follow the
-actual pixels. Qwen-Image-Edit is an image editor asked very firmly to paint
-one region white and everything else black - its edges are plausible rather
-than correct, and it can shift the subject slightly while repainting it. Always
-check the .overlay.png before trusting one of these.
+MEASURED RESULT: THIS DOES NOT WORK. Kept because the negative result is worth
+having written down, not because it is a path to take.
 
-Use it only where stage 20 fails outright: crops the parser was never trained
-on - no head, no shoulders, a frame too tight to read as a person. Where stage
-20 produces anything, that mask is better than this one.
+On five 768x1024 studio shots, asked for the leggings, it returned masks that
+were 92.5% to 97.8% white - the whole frame. The stage 20 parser gave 7.7% to
+8.3% on the same images, which is what a pair of legs actually occupies.
+
+The raw output (--keep-raw) says why: Qwen-Image-Edit did not produce a mask at
+all. It produced a LINE DRAWING of the photograph - leggings filled white,
+black outlines, face and top still in colour. It read "paint this region white
+and everything else black" as a stylization instruction, which is the kind of
+thing an image editor is trained to do, rather than as segmentation, which is
+not. No threshold recovers a leg region from a sketch, so this is not a tuning
+problem.
+
+Stage 20 is also ~6x faster per image (4.47s against 26.30s), so there is no
+axis on which this wins. Use scripts/pipeline/20_leg_masks.py.
+
+If you want to try anyway - a different prompt, a different model - the
+plumbing is here and --keep-raw shows what the model really returned. A mask
+whose coverage is implausible for its target is refused rather than written,
+because a 97%-white PNG that a later stage consumes silently is worse than no
+file at all.
 """
 
 import argparse
@@ -66,6 +79,11 @@ def parse_args():
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--threshold", type=int, default=127,
                     help="grey level above which a pixel becomes white (0-255)")
+    ap.add_argument("--min-coverage", type=float, default=1.0,
+                    help="refuse a mask under this %% white (default 1)")
+    ap.add_argument("--max-coverage", type=float, default=60.0,
+                    help="refuse a mask over this %% white (default 60; a leg "
+                         "region is about 8)")
     ap.add_argument("--steps", type=int, default=30)
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--guidance", type=float, default=4.0)
@@ -174,7 +192,7 @@ def main():
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     prompt = PROMPT.format(target=args.target)
-    ok = 0
+    ok = refused = 0
 
     for i, src in enumerate(images, 1):
         timer.start_image()
@@ -213,20 +231,36 @@ def main():
              .save(args.out_dir / f"{src.stem}.overlay.png")
 
         dt = timer.end_image()
-        verdict = ""
-        if coverage < 1:
-            verdict = "  <- almost nothing white; the model probably refused"
-        elif coverage > 70:
-            verdict = "  <- almost everything white; it painted the whole frame"
-        print(f"      {coverage:.1f}% white, {dt:.2f}s{verdict}")
+
+        # A mask this far from plausible is not a mask. Writing it anyway means
+        # a later stage consumes it without complaint - the 97%-white output
+        # this model actually produces would repaint the entire image.
+        if not args.min_coverage <= coverage <= args.max_coverage:
+            print(f"      {coverage:.1f}% white, {dt:.2f}s  REFUSED - outside "
+                  f"{args.min_coverage:g}-{args.max_coverage:g}%")
+            if args.keep_raw:
+                print(f"      (raw output kept as {src.stem}.qwen.png)")
+            for stale in (args.out_dir / f"{src.stem}.mask.png",
+                          args.out_dir / f"{src.stem}.overlay.png"):
+                stale.unlink(missing_ok=True)
+            refused += 1
+            continue
+
+        print(f"      {coverage:.1f}% white, {dt:.2f}s")
         ok += 1
 
     timer.report()
 
-    print(f"\n{ok} mask(s) in {args.out_dir.resolve()}")
-    print("Check the overlays before using these. A generated mask that is the "
-          "right\nshape in the wrong place looks fine as a mask and is useless "
-          "as one.")
+    print(f"\n{ok} mask(s) in {args.out_dir.resolve()}"
+          + (f", {refused} refused" if refused else ""))
+    if refused:
+        print("\nRefused masks had implausible coverage. On the images this was "
+              "measured\non, that is every one of them - see the note at the top "
+              "of this file.\nUse scripts/pipeline/20_leg_masks.py instead.")
+    if ok:
+        print("Check the overlays before using these. A generated mask that is "
+              "the right\nshape in the wrong place looks fine as a mask and is "
+              "useless as one.")
     return 0 if ok else 1
 
 

@@ -517,29 +517,16 @@ when you select one.
 
 ## 8. Stage 20 — leg masks
 
-Two ways to segment, and which is better depends on your images. Run both once
-on the same batch and compare — each prints its timing in the same format.
-
-### Qwen, staying in the stage 10 environment
-
 ```bash
-python scripts/pipeline/25_qwen_mask.py --in-dir work/variants-lower
-```
-
-No env swap: the mask step follows stage 10 with nothing to rebuild, and the
-model is already loaded. The mask is *generated* — edges are plausible rather
-than measured, and the model can shift the subject slightly while repainting.
-
-### The IDM-VTON parser
-
-```bash
-source scripts/alaya/env.sh
 python scripts/pipeline/20_leg_masks.py --in-dir work/variants-lower --overlay
 ```
 
 A segmentation network trained to label body parts, so its edges follow real
-pixels, and it cuts the feet at the ankles OpenPose finds. Loads in seconds,
-but needs the IDM-VTON env — on a 49 GB disk, an environment swap.
+pixels, and it cuts the feet at the ankles OpenPose finds.
+
+There is a second implementation, `25_qwen_mask.py`, which asks Qwen-Image-Edit
+for the mask instead. **It was measured and it does not work** — see below. Use
+this one.
 
 Writes `work/masks/NN_<pose>.mask.png`: white = leg area, black = everything
 else, feet excluded. `--overlay` also writes the mask drawn over the photo,
@@ -592,43 +579,36 @@ Where stage 20 produces anything at all, its mask is the better one.
 legs). `--threshold` tunes the cut between white and black. `--keep-raw` saves
 Qwen's unthresholded output as `<name>.qwen.png`.
 
-### Comparing the two
+### Why not Qwen: the measurement
 
-Both report load time apart from per-image time, because that is where they
-differ most — a few hundred MB of ONNX against 54 GB off a shared mount. A
-single seconds-per-image figure with the load folded in tells you the batch
-size, not which method is faster.
+Both were run over the same five images, one pose across five models, 768×1024,
+on an H100 80GB.
 
-```bash
-# Qwen env, straight after stage 10
-python scripts/pipeline/25_qwen_mask.py --in-dir work/variants-lower \
-    --out-dir work/masks-qwen --keep-raw
-
-# IDM env
-python scripts/pipeline/20_leg_masks.py --in-dir work/variants-lower \
-    --out-dir work/masks-idm --overlay
-```
-
-Measured on an H100 80GB, one pose across five models, 768×1024:
-
-| | Qwen-Image-Edit | IDM-VTON parser |
+| | IDM-VTON parser | Qwen-Image-Edit |
 |---|---|---|
-| load | 33.4s | 2.9s |
-| per image | 26.30s (26.17–26.74) | 4.47s (2.66–8.29) |
-| 5 images | 131.5s | 22.3s |
-| wall clock | 164.9s | 25.3s |
+| load | 2.9s | 33.4s |
+| per image | 4.47s (2.66–8.29) | 26.30s (26.17–26.74) |
+| wall clock, 5 images | 25.3s | 164.9s |
+| **mask coverage** | **7.7–8.3%** | **92.5–97.8%** |
 
-**The parser is ~6× faster per image, and likely ~9× in steady state.** Its
-spread is 3× because the first image carries CUDA and ONNX-session warmup;
-later ones land near 2.7s. Qwen's spread is 0.6s because a 40-step diffusion
-loop does the same work every time — which also means it scales linearly, so
-100 images is 44 minutes against about 5.
+The coverage row is the one that matters. A pair of legs is about 8% of a
+full-body frame, which is what the parser produced on every image. Qwen
+produced masks covering essentially the whole frame, on every image.
 
-So the parser is the default, and Qwen is for what it cannot read. That is what
-the `_unsegmented.txt` handoff already does. Speed alone does not settle it,
-though: open `work/masks-qwen/*.overlay.png` beside
-`work/masks-idm/*.overlay.png` and judge the edges, because the parser's follow
-real pixels and Qwen's are generated.
+`--keep-raw` shows why. Qwen did not return a mask at all — it returned a **line
+drawing** of the photograph: leggings filled white, black outlines, face and
+top still in colour. It read "paint this region white and everything else
+black" as a stylization instruction, which is what an image editor is trained
+to do, rather than as segmentation, which is not. No threshold recovers a leg
+region from a sketch, so this is not a prompt or threshold problem.
+
+It is also ~6× slower per image, and its 0.6s spread against the parser's 3×
+means it scales linearly where the parser front-loads its cost in warmup: 100
+images would be 44 minutes against about 5.
+
+`25_qwen_mask.py` now refuses to write a mask whose coverage is implausible for
+its target, rather than handing a later stage a 97%-white PNG it would consume
+without complaint.
 
 ## 9. Stage 30 — try-on across all views
 
